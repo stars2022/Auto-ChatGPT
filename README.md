@@ -1,5 +1,7 @@
 # Auto Codex Companion
 
+项目地址：[github.com/stars2022/Auto-ChatGPT](https://github.com/stars2022/Auto-ChatGPT)
+
 一个运行在本机的轻量 Codex/ChatGPT 辅助面板，专门处理两件事：
 
 1. 按时间把消息加入已有 Codex 线程队列（使用 `codex queue`）。
