@@ -32,7 +32,7 @@
     "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
     "win": { "target": ["nsis"], "artifactName": "Auto-Codex-Companion-Setup-${version}-${arch}.${ext}" },
     "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true },
-    "linux": { "target": ["AppImage", "deb"], "category": "Development", "maintainer": "opensource@example.com", "desktopName": "auto-codex-companion" },
+    "linux": { "target": ["AppImage", "deb"], "category": "Development", "maintainer": "opensource@example.com" },
     "publish": null
   }
 }
