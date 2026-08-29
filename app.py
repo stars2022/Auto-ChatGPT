@@ -351,7 +351,8 @@ def default_app_state() -> dict[str, Any]:
             "poll_seconds": POLL_SECONDS,
             "official_poll_minutes": 5,
             "notifications": True,
-            "default_network_retries": 3,
+            # 0 means retry forever (with exponential backoff).
+            "default_network_retries": 0,
             "default_backoff_seconds": 30,
         },
     }
@@ -445,6 +446,22 @@ def quota_snapshot() -> dict[str, Any]:
         "tracked_goals": len(rows),
         "checked_at": iso(now_ms()),
         "source": str(CODEX_HOME / "goals_1.sqlite"),
+    }
+
+
+def token_snapshot() -> dict[str, Any]:
+    """Aggregate token counters exposed by the local thread database."""
+    rows = get_thread_rows()
+    total = sum(max(0, int(row.get("tokens_used") or 0)) for row in rows)
+    active = sum(max(0, int(row.get("tokens_used") or 0)) for row in rows if row.get("goal_status") == "active")
+    limited = sum(max(0, int(row.get("tokens_used") or 0)) for row in rows if row.get("goal_status") == "usage_limited")
+    return {
+        "total_tokens": total,
+        "active_tokens": active,
+        "limited_tokens": limited,
+        "tracked_threads": len(rows),
+        "checked_at": iso(now_ms()),
+        "source": str(CODEX_HOME / "state_5.sqlite"),
     }
 
 
@@ -709,10 +726,22 @@ class Scheduler:
                     schedule["consecutive_failures"] = int(schedule.get("consecutive_failures") or 0) + 1
                 elif error_kind == "network" and schedule.get("retry_on_network", True):
                     failures = int(schedule.get("consecutive_failures") or 0) + 1
-                    max_attempts = max(1, int(schedule.get("max_attempts") or settings.get("default_network_retries") or 3))
-                    if failures <= max_attempts:
+                    configured_attempts = schedule.get("max_attempts")
+                    if configured_attempts in (None, ""):
+                        configured_attempts = settings.get("default_network_retries", 0)
+                    try:
+                        max_attempts = max(0, int(configured_attempts))
+                    except (TypeError, ValueError):
+                        max_attempts = 0
+                    # max_attempts=0 is intentionally unlimited. A retry remains
+                    # pending until it succeeds or the user pauses the schedule.
+                    if max_attempts == 0 or failures <= max_attempts:
                         backoff = max(1, int(schedule.get("backoff_seconds") or settings.get("default_backoff_seconds") or 30))
-                        schedule["next_attempt_at"] = attempt_at + backoff * (2 ** (failures - 1)) * 1000
+                        # Keep retry timing bounded while allowing an unlimited
+                        # number of attempts. This avoids integer/timestamp overflow
+                        # after a long offline period.
+                        delay_ms = min(backoff * (2 ** min(failures - 1, 12)) * 1000, 6 * 60 * 60 * 1000)
+                        schedule["next_attempt_at"] = attempt_at + delay_ms
                         schedule["retry_pending"] = True
                     schedule["consecutive_failures"] = failures
                 else:
@@ -752,7 +781,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/overview":
             app = read_app_state() or default_app_state()
-            self.send_json({"inventory": inventory(), "quota": quota_snapshot(), "official_usage": app.get("official_usage") or {"status": "not_checked"}, "usage_config": safe_usage_config(app.get("usage_config")), "usage_probe": app.get("usage_probe") or {"status": "not_checked"}, "settings": app.get("settings") or default_app_state()["settings"], "threads": get_thread_rows(), "schedules": app.get("schedules", []), "events": list(reversed(app.get("events", [])[-30:]))})
+            self.send_json({"inventory": inventory(), "quota": quota_snapshot(), "tokens": token_snapshot(), "official_usage": app.get("official_usage") or {"status": "not_checked"}, "usage_config": safe_usage_config(app.get("usage_config")), "usage_probe": app.get("usage_probe") or {"status": "not_checked"}, "settings": app.get("settings") or default_app_state()["settings"], "threads": get_thread_rows(), "schedules": app.get("schedules", []), "events": list(reversed(app.get("events", [])[-30:]))})
             return
         if parsed.path == "/api/threads":
             self.send_json({"threads": get_thread_rows()})
@@ -813,7 +842,7 @@ class Handler(BaseHTTPRequestHandler):
                 "price_budget_usd": float(data["price_budget_usd"]) if str(data.get("price_budget_usd") or "").strip() else None,
                 "price_per_1k_tokens": float(data["price_per_1k_tokens"]) if str(data.get("price_per_1k_tokens") or "").strip() else None,
                 "retry_on_network": bool(data.get("retry_on_network", True)), "retry_on_quota": bool(data.get("retry_on_quota", True)),
-                "max_attempts": max(1, int(data.get("max_attempts") or 3)), "backoff_seconds": max(1, int(data.get("backoff_seconds") or 30)),
+                "max_attempts": max(0, int(data.get("max_attempts") or 0)), "backoff_seconds": max(1, int(data.get("backoff_seconds") or 30)),
                 "created_at": now_ms(), "last_run_at": None, "last_attempt_at": None, "run_count": 0, "last_result": None,
                 "consecutive_failures": 0, "waiting_for_quota": False, "retry_pending": False, "next_attempt_at": None, "blocked_reason": None,
             }
@@ -868,7 +897,7 @@ class Handler(BaseHTTPRequestHandler):
                     "poll_seconds": max(5, int(data.get("poll_seconds") or settings.get("poll_seconds") or POLL_SECONDS)),
                     "official_poll_minutes": max(1, int(data.get("official_poll_minutes") or settings.get("official_poll_minutes") or 5)),
                     "notifications": bool(data.get("notifications", settings.get("notifications", True))),
-                    "default_network_retries": max(1, int(data.get("default_network_retries") or settings.get("default_network_retries") or 3)),
+                    "default_network_retries": max(0, int(data.get("default_network_retries") if data.get("default_network_retries") not in (None, "") else settings.get("default_network_retries", 0))),
                     "default_backoff_seconds": max(1, int(data.get("default_backoff_seconds") or settings.get("default_backoff_seconds") or 30)),
                 })
             except (TypeError, ValueError):

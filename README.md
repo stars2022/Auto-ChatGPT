@@ -5,6 +5,8 @@
 1. 按时间把消息加入已有 Codex 线程队列（使用 `codex queue`）。
 2. 监测线程的 `usage_limited` 状态，或监测额度接口恢复后自动继续。
 
+控制面板采用多标签页工作台：总览显示当前来源、运行中的线程、自动任务和 token 汇总；任务页管理自动继续计划；额度页分开管理官方 OAuth 与第三方 API；设置页包含后台策略和“关于与诊断”。
+
 ## 启动
 
 ```bash
@@ -54,7 +56,7 @@ GitHub Actions 会在目标系统用 PyInstaller 生成原生后台二进制并�
 - **第三方提供商**：不会使用官方订阅端点。若检测到 `config.toml` 的 `[model_providers.custom] base_url` 和 API key 模式的 `auth.json`，面板会自动把它作为第三方探针，默认请求 `${base_url}/v1/usage`，按 `remaining → quota.remaining → balance` 提取余额；也可以在面板里改路径并设置轮询间隔。
 - **本地兜底**：没有可用接口时，仍会读取 `goals_1.sqlite` 的目标状态；`usage_limited` 变成其他状态时视为恢复信号。
 - **任务预算**：每个计划可设置 token 上限、估算价格上限（USD）和 USD/1K token 单价。达到上限会自动停用计划并在事件流中说明原因。
-- **失败恢复**：网络/超时/502/503/504 会按指数退避自动重试；429、quota、usage limit 会挂起计划，等待官方窗口、第三方余额或本地 `usage_limited` 状态恢复后继续。
+- **失败恢复**：网络/超时/502/503/504 默认按指数退避持续重试（最大退避 6 小时；将最大重试次数设为大于 0 可限制次数）；429、quota、usage limit 会挂起计划，等待官方窗口、第三方余额或本地 `usage_limited` 状态恢复后继续。
 - 探针错误只记录状态，不会删除上一次成功快照；密钥始终不返回给前端，也不会写入日志。
 
 `/status` 通常是提供商的网页健康页，不是额度接口。当前本机 Pixel API 的 `/status` 返回 HTTP 200 HTML；真正的余额数据在 `/v1/usage`。

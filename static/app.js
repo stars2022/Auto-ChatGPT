@@ -1,38 +1,130 @@
-const $ = (s) => document.querySelector(s);
+const $ = (selector) => document.querySelector(selector);
 let overview = null;
-const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-const fmtTime = (v) => { if (!v) return '—'; try { return new Intl.DateTimeFormat('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(v)); } catch { return v; } };
-const toast = (msg) => { const el=$('#toast'); el.textContent=msg; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2600); };
-const statusClass = (s) => ['usage_limited','active','blocked','paused'].includes(s) ? s : '';
-const statusLabel = (s) => ({usage_limited:'额度受限',active:'运行中',blocked:'已阻塞',paused:'已暂停',complete:'已完成',budget_limited:'预算受限'}[s] || s || '无目标');
+let activeTab = 'overview';
 
-async function api(path, options={}) { const r=await fetch(path,{headers:{'Content-Type':'application/json'},...options}); const d=await r.json(); if(!r.ok) throw new Error(d.error||`HTTP ${r.status}`); return d; }
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[c]));
+const fmtTime = (value) => { if (!value) return '—'; try { return new Intl.DateTimeFormat('zh-CN', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }).format(new Date(value)); } catch { return value; } };
+const fmtTokens = (value) => { const n = Number(value || 0); return n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : n.toLocaleString(); };
+const toast = (message) => { const el = $('#toast'); if (!el) return; el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); };
+const statusClass = (status) => ['usage_limited','active','blocked','paused','complete'].includes(status) ? status : '';
+const statusLabel = (status) => ({ usage_limited:'额度受限', active:'运行中', blocked:'已阻塞', paused:'已暂停', complete:'已完成', budget_limited:'预算受限' }[status] || status || '无目标');
+const api = async (path, options = {}) => { const response = await fetch(path, { headers: { 'Content-Type':'application/json' }, ...options }); const data = await response.json(); if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); return data; };
+
+function switchTab(tab, updateUrl = true) {
+  if (!document.querySelector(`[data-panel="${tab}"]`)) tab = 'overview';
+  activeTab = tab;
+  document.querySelectorAll('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab));
+  const titles = { overview:'运行总览', tasks:'任务与自动继续', quota:'额度与来源', settings:'设置', events:'事件记录' };
+  $('#page-title').textContent = titles[tab] || titles.overview;
+  if (updateUrl) history.replaceState(null, '', `#${tab}`);
+}
+
+function sourceState() {
+  const auth = overview?.inventory?.auth || {};
+  const official = overview?.official_usage || {};
+  const thirdParty = overview?.usage_probe || {};
+  if (auth.kind === 'oauth' && official.status === 'ok') return { label:'官方 OAuth', detail:'已连接官方订阅额度窗口', tone:'good', code:'OFFICIAL' };
+  if (auth.kind === 'oauth') return { label:'官方 OAuth', detail:official.status === 'http_error' ? `官方接口返回 ${official.http_status}` : '已检测到 OAuth，等待额度检查', tone:'warn', code:'OAUTH' };
+  if (thirdParty.status === 'ok') return { label:'第三方 API', detail:`余额 ${thirdParty.remaining ?? '—'} ${thirdParty.unit || ''}`, tone:'good', code:'API' };
+  if (auth.kind === 'api_key' || overview?.usage_config?.api_key_configured) return { label:'API key', detail:'使用第三方额度探针或本地状态', tone:'neutral', code:'API KEY' };
+  return { label:'本地状态', detail:'未配置可查询的额度接口', tone:'neutral', code:'LOCAL' };
+}
+
 function renderMetrics() {
-  const inv=overview.inventory, q=overview.quota, ts=overview.threads||[], ss=overview.schedules||[];
-  const active=ts.filter(t=>t.goal_status==='active').length, limited=q.usage_limited||0, configured=ss.filter(s=>s.enabled).length;
-  $('#metrics').innerHTML=[['THREADS',ts.length,'最近 100 个线程'],['ACTIVE',active,'目标正在运行'],['LIMITED',limited,limited?'等待额度恢复':'当前无 usage_limited'],['SCHEDULES',configured,configured?'已启用':'尚未启用']].map(([l,v,s])=>`<div class="metric"><div class="label">${l}</div><div class="value">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join('');
-  $('#last-sync').textContent=`刚刚同步 · ${fmtTime(new Date())}`; $('#poll-label').textContent='15s'; $('#codex-version').textContent=inv.codex_version||'codex CLI 未找到';
+  const threads = overview.threads || [];
+  const schedules = overview.schedules || [];
+  const tokens = overview.tokens || {};
+  const q = overview.quota || {};
+  const source = sourceState();
+  const metrics = [
+    ['THREADS', threads.length, '最近 100 个线程'],
+    ['ACTIVE', threads.filter((t) => t.goal_status === 'active').length, '目标正在运行'],
+    ['LIMITED', q.usage_limited || 0, q.usage_limited ? '等待额度恢复' : '当前无受限目标'],
+    ['TASKS', schedules.filter((s) => s.enabled).length, '已启用自动任务'],
+    ['TOKENS', fmtTokens(tokens.total_tokens), '累计线程用量'],
+    ['SOURCE', source.label, source.detail],
+  ];
+  $('#metrics').innerHTML = metrics.map(([label, value, sub]) => `<div class="metric"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>`).join('');
+  $('#last-sync').textContent = `刚刚同步 · ${fmtTime(new Date())}`;
+  $('#sidebar-sync').textContent = `最近同步 ${fmtTime(new Date())}`;
+  $('#poll-label').textContent = `${overview.settings?.poll_seconds || 15}s`;
+  $('#codex-version').textContent = overview.inventory?.codex_version || 'codex CLI 未找到';
 }
+
+function renderHero() {
+  const source = sourceState();
+  const limited = overview.quota?.usage_limited || 0;
+  const active = (overview.threads || []).filter((t) => t.goal_status === 'active').length;
+  const tasks = (overview.schedules || []).filter((s) => s.enabled).length;
+  $('#hero-title').textContent = limited ? `${limited} 个任务正在等待额度恢复` : active ? `${active} 个线程正在运行` : '后台已就绪，等待你的任务';
+  $('#hero-copy').textContent = `${source.label} · ${source.detail}。当前有 ${tasks} 个自动任务，后台会持续监测并在可用时继续。`;
+  $('#source-badge').textContent = source.code;
+  $('#overview-source').textContent = source.label;
+  $('#overview-source-detail').textContent = source.detail;
+  const pill = $('#overview-quota-pill'); pill.className = `pill ${source.tone}`; pill.textContent = source.tone === 'good' ? '正常' : source.tone === 'warn' ? '需检查' : '本地监测';
+}
+
+function renderActiveTasks() {
+  const activeThreads = (overview.threads || []).filter((t) => ['active','usage_limited','blocked'].includes(t.goal_status)).slice(0, 7);
+  const schedules = (overview.schedules || []).filter((s) => s.enabled).slice(0, 7);
+  const items = activeThreads.length ? activeThreads.map((t) => `<div class="active-task"><span class="task-dot ${t.goal_status === 'usage_limited' ? 'limited' : ''}"></span><div class="active-task-main"><div class="active-task-name" title="${esc(t.title)}">${esc(t.title || '未命名线程')}</div><div class="active-task-meta">${esc(statusLabel(t.goal_status))} · ${fmtTokens(t.tokens_used)} tokens · ${esc(t.model || '默认模型')}</div></div><button class="mini enqueue" data-id="${esc(t.id)}">继续</button></div>`).join('') : schedules.map((s) => `<div class="active-task"><span class="task-dot ${s.waiting_for_quota ? 'limited' : ''}"></span><div class="active-task-main"><div class="active-task-name">${esc(s.name)}</div><div class="active-task-meta">${esc(s.waiting_for_quota ? '等待额度恢复' : '自动任务已启用')} · ${esc(s.kind === 'interval' ? `每 ${s.interval_minutes} 分钟` : s.kind === 'at_time' ? `指定时间 ${fmtTime(s.run_at)}` : '额度恢复')}</div></div></div>`).join('');
+  $('#active-tasks').innerHTML = items || '<div class="empty">暂无运行中的线程。添加一个自动任务开始。</div>';
+  document.querySelectorAll('.enqueue').forEach((button) => { button.onclick = () => quickEnqueue(button.dataset.id); });
+}
+
+function renderQuotaBars() {
+  const windows = overview.official_usage?.windows || [];
+  $('#overview-quota-bars').innerHTML = windows.length ? windows.slice(0, 3).map((w) => { const used = Math.min(100, Math.max(0, Number(w.used_percent || 0))); return `<div class="quota-bar-row"><span>${esc(w.name.replace('_', ' '))}</span><div class="quota-bar"><i style="width:${used}%"></i></div><strong>${used}%</strong></div>`; }).join('') : '<div class="muted small">暂无官方窗口数据</div>';
+  $('#quota-windows').innerHTML = windows.length ? windows.map((w) => { const used = Math.min(100, Math.max(0, Number(w.used_percent || 0))); return `<article class="window-card"><header><span>${esc(w.name.replace('_', ' '))}</span><span>${used < 100 ? '可用' : '已用尽'}</span></header><div class="percent">${used}%</div><div class="quota-bar"><i style="width:${used}%"></i></div><div class="reset">${w.reset_at ? `预计重置 ${fmtTime(w.reset_at)}` : '未提供重置时间'}</div></article>`; }).join('') : '<div class="empty">官方 OAuth 检查后显示窗口。</div>';
+}
+
 function renderQuota() {
-  const q=overview.quota, p=overview.official_usage||{}, limited=q.usage_limited||0; $('#quota-count').textContent=limited; $('#quota-message').textContent=limited?`有 ${limited} 个目标被标记为 usage_limited。恢复后将触发对应计划。`:'当前没有线程处于 usage_limited。';
-  const pill=$('#probe-pill'); pill.className='pill '+(p.status==='ok'?'good':p.status==='http_error'?'warn':'neutral'); pill.textContent=p.status==='ok'?'官方已连接':p.status==='http_error'?`官方 ${p.http_status}`:'本地监测';
-  if(p.status && p.status!=='not_checked'){ $('#official-result').classList.remove('hidden'); $('#official-result').textContent=p.status==='ok'?`官方接口 ${p.endpoint}\n认证类型：${p.auth_kind}\n窗口：${(p.windows||[]).map(w=>`${w.name} 已用 ${w.used_percent}%${w.reset_at?' · 重置 '+fmtTime(w.reset_at):''}`).join('；')||'接口成功但未返回 rate_limit 窗口'}\n响应摘要：${JSON.stringify(p.data||{}).slice(0,700)}`:`官方接口 ${p.endpoint||''}\n状态：${p.status} ${p.http_status||''}\n${JSON.stringify(p.detail||'').slice(0,600)}`; }
+  const official = overview.official_usage || {};
+  const auth = overview.inventory?.auth || {};
+  const pill = $('#probe-pill'); pill.className = `pill ${official.status === 'ok' ? 'good' : official.status === 'http_error' ? 'warn' : 'neutral'}`; pill.textContent = official.status === 'ok' ? '已连接' : official.status === 'http_error' ? `HTTP ${official.http_status}` : '未检查';
+  $('#quota-page-status').className = `pill ${official.status === 'ok' ? 'good' : official.status === 'http_error' ? 'warn' : 'neutral'}`; $('#quota-page-status').textContent = official.status === 'ok' ? '官方数据已更新' : auth.kind === 'api_key' ? 'API key 模式' : '等待检查';
+  $('#official-auth-summary').textContent = auth.kind === 'oauth' ? `已检测到官方 OAuth（来源：${auth.source || '本机凭据'}）。账号标识仅用于请求，不会展示。` : auth.kind === 'api_key' ? '当前是 API key 模式，官方订阅端点不会接受此凭据。请使用第三方 API 探针或本地线程状态。' : '未发现官方 OAuth 凭据。登录 Codex 后可在这里检查订阅窗口。';
+  const result = $('#official-result');
+  if (official.status && official.status !== 'not_checked') { result.classList.remove('hidden'); result.textContent = official.status === 'ok' ? `接口：${official.endpoint}\n认证：${official.auth_kind}\n窗口：${(official.windows || []).map((w) => `${w.name} 已用 ${w.used_percent}%${w.reset_at ? ` · 重置 ${fmtTime(w.reset_at)}` : ''}`).join('；') || '接口成功但未返回窗口'}` : `接口：${official.endpoint || ''}\n状态：${official.status} ${official.http_status || ''}\n${JSON.stringify(official.detail || '').slice(0, 600)}`; }
+  renderQuotaBars();
 }
-function renderThreads() { const rows=overview.threads||[]; $('#threads').innerHTML=rows.length?rows.slice(0,30).map(t=>`<tr><td><div class="thread-title" title="${esc(t.title)}">${esc(t.title||'未命名线程')}</div><div class="thread-path" title="${esc(t.cwd)}">${esc(t.cwd||'')}</div></td><td><span class="status ${statusClass(t.goal_status)}">${esc(statusLabel(t.goal_status))}</span></td><td class="muted">${esc(t.model||'—')}</td><td class="muted">${esc(fmtTime(t.updated_at))}</td><td><button class="mini enqueue" data-id="${esc(t.id)}">继续</button></td></tr>`).join(''):'<tr><td colspan="5" class="empty">未找到线程数据库或线程记录。</td></tr>'; document.querySelectorAll('.enqueue').forEach(b=>b.onclick=()=>quickEnqueue(b.dataset.id)); }
-function renderSchedules() { const rows=overview.schedules||[]; $('#schedule-list').innerHTML=rows.length?rows.map(s=>`<div class="schedule-item"><div class="schedule-main"><div class="schedule-name">${esc(s.name)} ${s.enabled?'<span class="pill good">启用</span>':'<span class="pill">暂停</span>'} ${s.waiting_for_quota?'<span class="pill warn">等待额度</span>':''}</div><div class="schedule-meta">${esc(s.kind==='quota_recovered'?'额度恢复':s.kind==='interval'?`每 ${s.interval_minutes} 分钟`:`指定时间 ${fmtTime(s.run_at)}`)} · ${s.run_count||0} 次执行${s.token_budget?` · token ≤ ${Number(s.token_budget).toLocaleString()}`:''}${s.price_budget_usd?` · 价格 ≤ $${s.price_budget_usd}`:''}${s.last_result?` · ${s.last_result.ok?'成功':'失败'}`:''}</div>${s.blocked_reason?`<div class="muted small">${esc(s.blocked_reason)}</div>`:''}${s.next_attempt_at?`<div class="muted small">下次重试：${esc(fmtTime(new Date(s.next_attempt_at)))}</div>`:''}</div><div class="schedule-actions"><button class="mini toggle-schedule" data-id="${esc(s.id)}" data-enabled="${!s.enabled}">${s.enabled?'暂停':'启用'}</button><button class="mini delete-schedule" data-id="${esc(s.id)}">删除</button></div></div>`).join(''):'<div class="empty">还没有计划。点击“新建计划”开始。</div>'; document.querySelectorAll('.toggle-schedule').forEach(b=>b.onclick=async()=>{try{await api('/api/schedules/toggle',{method:'POST',body:JSON.stringify({id:b.dataset.id,enabled:b.dataset.enabled==='true'})});toast('计划状态已更新');load()}catch(e){toast(e.message)}}); document.querySelectorAll('.delete-schedule').forEach(b=>b.onclick=async()=>{if(!confirm('删除这个计划？'))return;try{await api('/api/schedules/delete',{method:'POST',body:JSON.stringify({id:b.dataset.id})});toast('计划已删除');load()}catch(e){toast(e.message)}}); }
-function renderEvents() { const rows=overview.events||[]; $('#events').innerHTML=rows.length?rows.map(e=>`<div class="event"><div class="event-time">${esc(fmtTime(e.at))}</div><div><span class="event-kind">${esc(e.kind||'event')}</span>${esc(e.message||'')}</div>${e.detail?`<div class="muted small">${esc(e.detail)}</div>`:''}</div>`).join(''):'<div class="empty">暂无事件</div>'; }
-function renderInventory() { const rows=overview.inventory.files||[]; $('#inventory-list').innerHTML=rows.map(f=>`<div class="inventory-row ${f.exists?'':'missing'}"><div><div>${esc(f.label)} ${f.sensitive?'· <span class="muted">敏感</span>':''}</div><div class="path" title="${esc(f.path)}">${esc(f.path)}</div></div><div class="size">${f.exists?`${(f.size/1024).toFixed(1)} KB`:'缺失'}</div></div>`).join(''); const cfg=overview.inventory.config||[]; $('#config-keys').innerHTML=cfg.map(k=>k.key?`<span class="key ${k.sensitive?'sensitive':''}">${esc(k.section==='(root)'?k.key:`${k.section}.${k.key}`)}${k.sensitive?' · 脱敏':''}</span>`:'').join(''); }
-function renderUsageConfig() { const c=overview.usage_config||{}, p=overview.usage_probe||{}; const f=$('#usage-form'); f.base_url.value=c.base_url||''; f.path.value=c.path||'/v1/usage'; f.unit.value=c.unit||'USD'; f.poll_minutes.value=c.poll_minutes||5; $('#usage-pill').className='pill '+(c.api_key_configured?'good':'neutral'); $('#usage-pill').textContent=c.auto_from_codex?'从 Codex 配置':'未配置'; if(p.status&&p.status!=='not_configured'&&p.status!=='not_checked'){ $('#usage-result').classList.remove('hidden'); const stale=p.status==='ok'?'':(p.last_good?`\n上次成功余额：${p.last_good.remaining??'—'} ${p.last_good.unit||c.unit||''}`:''); $('#usage-result').textContent=p.status==='ok'?`第三方接口 ${c.base_url}${c.path}\n余额：${p.remaining??'—'} ${p.unit||c.unit||''}\n检查时间：${p.checked_at}`:`第三方接口状态：${p.status}\n${p.detail||''}${stale}`; } }
-function renderSettings(){ const s=overview.settings||{}; const f=$('#settings-form'); if(!f)return; f.poll_seconds.value=s.poll_seconds||15; f.official_poll_minutes.value=s.official_poll_minutes||5; f.default_network_retries.value=s.default_network_retries||3; f.default_backoff_seconds.value=s.default_backoff_seconds||30; f.notifications.checked=s.notifications!==false; }
-function renderAll(){renderMetrics();renderQuota();renderThreads();renderSchedules();renderEvents();renderInventory();renderUsageConfig();renderSettings();}
-function renderAll(){renderMetrics();renderQuota();renderThreads();renderSchedules();renderEvents();renderInventory();renderUsageConfig();}
-async function load(){try{overview=await api('/api/overview');renderAll()}catch(e){$('#last-sync').textContent='连接失败';toast(e.message)}}
-async function quickEnqueue(id){const msg=prompt('发送给这个线程的继续消息：','继续之前的任务；先检查当前状态，再从上次停下的位置继续。');if(!msg)return;try{const r=await api('/api/enqueue',{method:'POST',body:JSON.stringify({thread_id:id,message:msg})});toast(r.detail||'已加入队列');load()}catch(e){toast(e.message)}}
-function openSchedule(){const select=$('#thread-select');select.innerHTML=(overview.threads||[]).filter(t=>t.id).map(t=>`<option value="${esc(t.id)}">${esc(t.title||t.id.slice(0,12))} · ${esc(statusLabel(t.goal_status))}</option>`).join(''); if(!select.options.length){toast('没有可用线程');return} $('#schedule-dialog').showModal();}
-$('#refresh').onclick=load; $('#new-schedule').onclick=openSchedule; $('#close-dialog').onclick=()=>$('#schedule-dialog').close(); $('#cancel-dialog').onclick=()=>$('#schedule-dialog').close(); $('#schedule-kind').onchange=(e)=>{$('#interval-field').classList.toggle('hidden',e.target.value!=='interval');$('#time-field').classList.toggle('hidden',e.target.value!=='at_time')};
-$('#schedule-form').onsubmit=async(e)=>{e.preventDefault();const f=new FormData(e.target), d=Object.fromEntries(f.entries());d.interval_minutes=Number(d.interval_minutes||60);d.token_budget=d.token_budget||null;d.price_budget_usd=d.price_budget_usd||null;d.price_per_1k_tokens=d.price_per_1k_tokens||null;d.max_attempts=Number(d.max_attempts||3);d.retry_on_network=f.has('retry_on_network');d.retry_on_quota=f.has('retry_on_quota');try{await api('/api/schedules',{method:'POST',body:JSON.stringify(d)});$('#schedule-dialog').close();toast('计划已创建');e.target.reset();load()}catch(err){toast(err.message)}};
-$('#settings-form').onsubmit=async(e)=>{e.preventDefault();const f=new FormData(e.target),d=Object.fromEntries(f.entries());d.poll_seconds=Number(d.poll_seconds||15);d.official_poll_minutes=Number(d.official_poll_minutes||5);d.default_network_retries=Number(d.default_network_retries||3);d.default_backoff_seconds=Number(d.default_backoff_seconds||30);d.notifications=f.has('notifications');try{await api('/api/settings',{method:'POST',body:JSON.stringify(d)});toast('后台设置已保存');load()}catch(err){toast(err.message)}};
-$('#usage-form').onsubmit=async(e)=>{e.preventDefault();const f=new FormData(e.target),d=Object.fromEntries(f.entries());d.enabled=true;d.poll_minutes=Number(d.poll_minutes||5);try{await api('/api/usage-config',{method:'POST',body:JSON.stringify(d)});toast('探针已保存（密钥只存本机）');load()}catch(err){toast(err.message)}};
-$('#usage-check').onclick=async()=>{try{const r=await api('/api/usage-check',{method:'POST',body:'{}'});$('#usage-result').classList.remove('hidden');$('#usage-result').textContent=JSON.stringify(r.probe,null,2);toast('自定义接口检查完成')}catch(e){toast(e.message)}};
-$('#official-check').onclick=async()=>{try{const r=await api('/api/official-usage-check',{method:'POST',body:'{}'});overview.official_usage=r.probe;renderQuota();toast('官方接口检查完成')}catch(e){toast(e.message)}};
-load(); setInterval(load,15000);
+
+function renderThreads() {
+  const rows = overview.threads || [];
+  $('#threads').innerHTML = rows.length ? rows.slice(0, 60).map((t) => `<tr><td><div class="thread-title" title="${esc(t.title)}">${esc(t.title || '未命名线程')}</div><div class="thread-path" title="${esc(t.cwd)}">${esc(t.cwd || '')}</div></td><td><span class="status ${statusClass(t.goal_status)}">${esc(statusLabel(t.goal_status))}</span></td><td class="muted">${fmtTokens(t.tokens_used)}</td><td class="muted">${esc(t.model || '—')}</td><td class="muted">${esc(fmtTime(t.updated_at))}</td><td><button class="mini enqueue" data-id="${esc(t.id)}">继续</button></td></tr>`).join('') : '<tr><td colspan="6" class="empty">未找到线程数据库或线程记录。</td></tr>';
+  document.querySelectorAll('.enqueue').forEach((button) => { button.onclick = () => quickEnqueue(button.dataset.id); });
+}
+
+function renderTasks() {
+  const schedules = overview.schedules || [];
+  const threads = overview.threads || [];
+  const stats = [['启用中', schedules.filter((s) => s.enabled).length], ['等待额度', schedules.filter((s) => s.waiting_for_quota).length], ['无限重试', schedules.filter((s) => !s.max_attempts).length], ['线程 Tokens', fmtTokens((overview.tokens || {}).total_tokens)]];
+  $('#task-stats').innerHTML = stats.map(([label, value]) => `<div class="task-stat"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join('');
+  $('#schedule-list').innerHTML = schedules.length ? schedules.map((s) => `<div class="schedule-item"><div class="schedule-main"><div class="schedule-name">${esc(s.name)} <span class="pill ${s.enabled ? 'good' : 'neutral'}">${s.enabled ? '启用' : '暂停'}</span> ${s.waiting_for_quota ? '<span class="pill warn">等待额度</span>' : ''}</div><div class="schedule-meta">${esc(s.kind === 'quota_recovered' ? '额度恢复' : s.kind === 'interval' ? `每 ${s.interval_minutes} 分钟` : `指定时间 ${fmtTime(s.run_at)}`)} · ${s.run_count || 0} 次执行${s.token_budget ? ` · token ≤ ${Number(s.token_budget).toLocaleString()}` : ''}${s.price_budget_usd ? ` · 价格 ≤ $${s.price_budget_usd}` : ''}${s.last_result ? ` · ${s.last_result.ok ? '成功' : '失败'}` : ''} · ${s.max_attempts ? `失败最多重试 ${s.max_attempts} 次` : '网络失败无限重试'}</div>${s.blocked_reason ? `<div class="muted small">${esc(s.blocked_reason)}</div>` : ''}${s.next_attempt_at ? `<div class="muted small">下次重试：${esc(fmtTime(new Date(s.next_attempt_at)))}</div>` : ''}</div><div class="schedule-actions"><button class="mini toggle-schedule" data-id="${esc(s.id)}" data-enabled="${!s.enabled}">${s.enabled ? '暂停' : '启用'}</button><button class="mini delete-schedule" data-id="${esc(s.id)}">删除</button></div></div>`).join('') : '<div class="empty">还没有任务。点击“新建任务”开始。</div>';
+  document.querySelectorAll('.toggle-schedule').forEach((button) => { button.onclick = async () => { try { await api('/api/schedules/toggle', { method:'POST', body:JSON.stringify({ id:button.dataset.id, enabled:button.dataset.enabled === 'true' }) }); toast('任务状态已更新'); load(); } catch (error) { toast(error.message); } }; });
+  document.querySelectorAll('.delete-schedule').forEach((button) => { button.onclick = async () => { if (!confirm('删除这个任务？')) return; try { await api('/api/schedules/delete', { method:'POST', body:JSON.stringify({ id:button.dataset.id }) }); toast('任务已删除'); load(); } catch (error) { toast(error.message); } }; });
+}
+
+function renderEvents() { const rows = overview.events || []; $('#events').innerHTML = rows.length ? rows.map((e) => `<div class="event"><div class="event-time">${esc(fmtTime(e.at))}</div><div><span class="event-kind">${esc(e.kind || 'event')}</span>${esc(e.message || '')}</div>${e.detail ? `<div class="muted small">${esc(e.detail)}</div>` : ''}</div>`).join('') : '<div class="empty">暂无事件</div>'; }
+function renderInventory() { const rows = overview.inventory?.files || []; $('#inventory-list').innerHTML = rows.map((f) => `<div class="inventory-row ${f.exists ? '' : 'missing'}"><div><div>${esc(f.label)} ${f.sensitive ? '· <span class="muted">敏感</span>' : ''}</div><div class="path" title="${esc(f.path)}">${esc(f.path)}</div></div><div class="size">${f.exists ? `${(f.size / 1024).toFixed(1)} KB` : '缺失'}</div></div>`).join(''); const cfg = overview.inventory?.config || []; $('#config-keys').innerHTML = cfg.map((k) => k.key ? `<span class="key ${k.sensitive ? 'sensitive' : ''}">${esc(k.section === '(root)' ? k.key : `${k.section}.${k.key}`)}${k.sensitive ? ' · 脱敏' : ''}</span>` : '').join(''); }
+function renderUsageConfig() { const config = overview.usage_config || {}; const probe = overview.usage_probe || {}; const form = $('#usage-form'); form.base_url.value = config.base_url || ''; form.path.value = config.path || '/v1/usage'; form.unit.value = config.unit || 'USD'; form.poll_minutes.value = config.poll_minutes || 5; const pill = $('#usage-pill'); pill.className = `pill ${config.api_key_configured ? 'good' : 'neutral'}`; pill.textContent = config.auto_from_codex ? '从 Codex 配置' : config.api_key_configured ? '已配置' : '未配置'; const result = $('#usage-result'); if (probe.status && probe.status !== 'not_configured' && probe.status !== 'not_checked') { result.classList.remove('hidden'); const stale = probe.status === 'ok' ? '' : probe.last_good ? `\n上次成功余额：${probe.last_good.remaining ?? '—'} ${probe.last_good.unit || config.unit || ''}` : ''; result.textContent = probe.status === 'ok' ? `接口：${config.base_url}${config.path}\n余额：${probe.remaining ?? '—'} ${probe.unit || config.unit || ''}\n检查时间：${probe.checked_at}` : `接口状态：${probe.status}\n${probe.detail || ''}${stale}`; } }
+function renderSettings() { const settings = overview.settings || {}; const form = $('#settings-form'); form.poll_seconds.value = settings.poll_seconds || 15; form.official_poll_minutes.value = settings.official_poll_minutes || 5; form.default_network_retries.value = settings.default_network_retries ?? 0; form.default_backoff_seconds.value = settings.default_backoff_seconds || 30; form.notifications.checked = settings.notifications !== false; }
+function renderAll() { renderMetrics(); renderHero(); renderActiveTasks(); renderQuota(); renderThreads(); renderTasks(); renderEvents(); renderInventory(); renderUsageConfig(); renderSettings(); }
+
+async function load() { try { overview = await api('/api/overview'); renderAll(); } catch (error) { $('#last-sync').textContent = '连接失败'; toast(error.message); } }
+async function quickEnqueue(threadId) { const message = prompt('发送给这个线程的继续消息：', '继续之前的任务；先检查当前状态，再从上次停下的位置继续。'); if (!message) return; try { const result = await api('/api/enqueue', { method:'POST', body:JSON.stringify({ thread_id:threadId, message }) }); toast(result.detail || '已加入队列'); load(); } catch (error) { toast(error.message); } }
+function openSchedule() { const select = $('#thread-select'); select.innerHTML = (overview.threads || []).filter((thread) => thread.id).map((thread) => `<option value="${esc(thread.id)}">${esc(thread.title || thread.id.slice(0, 12))} · ${esc(statusLabel(thread.goal_status))}</option>`).join(''); if (!select.options.length) { toast('没有可用线程'); switchTab('tasks'); return; } $('#schedule-dialog').showModal(); }
+
+document.querySelectorAll('[data-tab]').forEach((button) => { button.onclick = () => switchTab(button.dataset.tab); });
+document.querySelectorAll('[data-go-tab]').forEach((button) => { button.onclick = () => switchTab(button.dataset.goTab); });
+$('#refresh').onclick = load; $('#top-new-task').onclick = openSchedule; $('#hero-add-task').onclick = openSchedule; $('#quick-new-task').onclick = openSchedule; $('#new-schedule').onclick = openSchedule;
+$('#hero-check-quota').onclick = () => { switchTab('quota'); $('#official-check').click(); }; $('#quick-check-official').onclick = () => { switchTab('quota'); $('#official-check').click(); }; $('#quick-scan').onclick = () => { switchTab('settings'); toast('配置清单已移至设置 → 关于与诊断'); document.querySelector('.about-panel details').open = true; };
+$('#close-dialog').onclick = () => $('#schedule-dialog').close(); $('#cancel-dialog').onclick = () => $('#schedule-dialog').close(); $('#schedule-kind').onchange = (event) => { $('#interval-field').classList.toggle('hidden', event.target.value !== 'interval'); $('#time-field').classList.toggle('hidden', event.target.value !== 'at_time'); };
+$('#schedule-form').onsubmit = async (event) => { event.preventDefault(); const form = new FormData(event.target); const data = Object.fromEntries(form.entries()); data.interval_minutes = Number(data.interval_minutes || 60); data.token_budget = data.token_budget || null; data.price_budget_usd = data.price_budget_usd || null; data.price_per_1k_tokens = data.price_per_1k_tokens || null; data.max_attempts = Number(data.max_attempts || 0); data.retry_on_network = form.has('retry_on_network'); data.retry_on_quota = form.has('retry_on_quota'); try { await api('/api/schedules', { method:'POST', body:JSON.stringify(data) }); $('#schedule-dialog').close(); toast('任务已创建'); event.target.reset(); load(); } catch (error) { toast(error.message); } };
+$('#settings-form').onsubmit = async (event) => { event.preventDefault(); const form = new FormData(event.target); const data = Object.fromEntries(form.entries()); data.poll_seconds = Number(data.poll_seconds || 15); data.official_poll_minutes = Number(data.official_poll_minutes || 5); data.default_network_retries = Number(data.default_network_retries || 0); data.default_backoff_seconds = Number(data.default_backoff_seconds || 30); data.notifications = form.has('notifications'); try { await api('/api/settings', { method:'POST', body:JSON.stringify(data) }); toast('后台设置已保存'); load(); } catch (error) { toast(error.message); } };
+$('#usage-form').onsubmit = async (event) => { event.preventDefault(); const form = new FormData(event.target); const data = Object.fromEntries(form.entries()); data.enabled = true; data.poll_minutes = Number(data.poll_minutes || 5); try { await api('/api/usage-config', { method:'POST', body:JSON.stringify(data) }); toast('探针已保存（密钥只存本机）'); load(); } catch (error) { toast(error.message); } };
+$('#usage-check').onclick = async () => { try { const result = await api('/api/usage-check', { method:'POST', body:'{}' }); overview.usage_probe = result.probe; renderUsageConfig(); toast('第三方接口检查完成'); } catch (error) { toast(error.message); } };
+$('#official-check').onclick = async () => { try { const result = await api('/api/official-usage-check', { method:'POST', body:'{}' }); overview.official_usage = result.probe; renderHero(); renderQuota(); toast('官方接口检查完成'); } catch (error) { toast(error.message); } };
+
+const initialTab = location.hash.replace('#', ''); switchTab(initialTab || 'overview', false); load(); setInterval(load, 15000);
