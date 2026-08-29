@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Auto Codex Companion</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><div class="brand-mark">⌁</div><div><div class="eyebrow">LOCAL CONTROL PLANE</div><h1>Auto Codex Companion</h1></div></div>
+      <div class="top-actions"><span id="last-sync" class="muted">正在连接…</span><button class="button ghost" id="refresh">刷新</button></div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div><p class="eyebrow accent">CODEx / CHATGPT</p><h2>让任务在额度回来时继续。</h2><p class="hero-copy">本地读取线程状态，按时间或额度恢复触发队列消息。凭据不会离开本机，也不会出现在页面响应中。</p></div>
+        <div class="hero-orbit"><span class="orbit-ring"></span><span class="orbit-dot"></span><span class="orbit-label">MONITORING</span></div>
+      </section>
+
+      <section class="metrics" id="metrics"><div class="metric loading"></div><div class="metric loading"></div><div class="metric loading"></div><div class="metric loading"></div></section>
+
+      <div class="grid two">
+        <section class="panel quota-panel"><div class="panel-heading"><div><p class="eyebrow">QUOTA SIGNAL</p><h3>额度与状态</h3></div><span id="probe-pill" class="pill neutral">本地监测</span></div>
+          <div class="quota-body"><div class="quota-ring"><strong id="quota-count">—</strong><span>usage limited</span></div><div class="quota-copy"><p id="quota-message">正在读取 thread_goals…</p><p class="muted small">本地数据库只暴露状态，不暴露官方剩余数值。可在下方接入你的 `/v1/usage` 探针。</p><button class="button small-button" id="official-check">检查官方接口</button></div></div>
+          <div id="official-result" class="probe-result hidden"></div>
+        </section>
+
+        <section class="panel usage-panel"><div class="panel-heading"><div><p class="eyebrow">OPTIONAL PROBE</p><h3>自定义额度接口</h3></div><span id="usage-pill" class="pill neutral">未配置</span></div>
+          <p class="muted small">兼容你提供的 extractor 逻辑：`remaining → quota.remaining → balance`。</p>
+          <form id="usage-form" class="compact-form"><div class="form-row"><label>Base URL<input name="base_url" placeholder="https://example.com" autocomplete="off" /></label><label>路径<input name="path" value="/v1/usage" autocomplete="off" /></label></div><div class="form-row"><label>API Key<input name="api_key" type="password" placeholder="仅保存到本机 0600 文件" autocomplete="off" /></label><label>单位<input name="unit" value="USD" /></label></div><div class="form-row form-footer"><label>轮询间隔（分钟）<input name="poll_minutes" type="number" min="1" value="5" /></label><button class="button" type="submit">保存探针</button><button class="button ghost" type="button" id="usage-check">立即检查</button></div></form><div id="usage-result" class="probe-result hidden"></div>
+        </section>
+      </div>
+
+      <section class="panel"><div class="panel-heading"><div><p class="eyebrow">THREADS</p><h3>最近线程</h3></div><span class="muted small">从 state_5.sqlite + goals_1.sqlite 读取</span></div><div class="table-wrap"><table><thead><tr><th>线程</th><th>状态</th><th>模型</th><th>最近更新</th><th></th></tr></thead><tbody id="threads"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody></table></div></section>
+
+      <div class="grid two lower-grid">
+        <section class="panel"><div class="panel-heading"><div><p class="eyebrow">SCHEDULES</p><h3>自动继续计划</h3></div><button class="button" id="new-schedule">新建计划</button></div><div id="schedule-list" class="schedule-list"><div class="empty">还没有计划。</div></div></section>
+        <section class="panel"><div class="panel-heading"><div><p class="eyebrow">EVENT STREAM</p><h3>事件</h3></div></div><div id="events" class="event-list"><div class="empty">暂无事件</div></div></section>
+      </div>
+
+      <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">CONTROL PLANE</p><h3>后台与重试设置</h3></div><span id="runtime-pill" class="pill good">后台轮询中</span></div><form id="settings-form" class="compact-form"><div class="form-row"><label>本地扫描间隔（秒）<input name="poll_seconds" type="number" min="5" value="15" /></label><label>官方 OAuth 轮询（分钟）<input name="official_poll_minutes" type="number" min="1" value="5" /></label></div><div class="form-row"><label>网络失败最大重试次数<input name="default_network_retries" type="number" min="1" value="3" /></label><label>首次退避（秒）<input name="default_backoff_seconds" type="number" min="1" value="30" /></label></div><div class="form-row form-footer"><label class="check-label"><input name="notifications" type="checkbox" checked /> 桌面通知（macOS 原生，其他平台写入事件流）</label><span class="muted small">额度耗尽：挂起等待恢复；网络失败：指数退避</span><button class="button" type="submit">保存设置</button></div></form></section>
+
+      <section class="panel inventory"><div class="panel-heading"><div><p class="eyebrow">DISCOVERY</p><h3>可访问配置清单</h3></div><span id="codex-version" class="code-tag">—</span></div><p class="muted small inventory-note">只展示路径、大小与键名；凭据文件不会被读取到前端。</p><div id="inventory-list" class="inventory-list"></div><details><summary>配置键名（已脱敏值）</summary><div id="config-keys" class="config-keys"></div></details></section>
+    </main>
+    <footer><span>Auto Codex Companion · 本地服务 <code>127.0.0.1</code></span><span>轮询间隔 <code id="poll-label">15s</code></span></footer>
+  </div>
+
+  <dialog id="schedule-dialog"><form method="dialog" id="schedule-form"><div class="dialog-heading"><div><p class="eyebrow">NEW SCHEDULE</p><h3>创建自动继续计划</h3></div><button type="button" class="icon-button" id="close-dialog">×</button></div><label>名称<input name="name" value="额度恢复后继续" required /></label><label>目标线程<select name="thread_id" id="thread-select" required></select></label><label>触发方式<select name="kind" id="schedule-kind"><option value="quota_recovered">额度恢复（官方/第三方/本地）</option><option value="interval">固定间隔</option><option value="at_time">指定时间</option></select></label><label id="interval-field">间隔分钟<input name="interval_minutes" type="number" min="1" value="60" /></label><label id="time-field" class="hidden">执行时间<input name="run_at" type="datetime-local" /></label><div class="form-row"><label>Token 预算（可选）<input name="token_budget" type="number" min="1" placeholder="例如 200000" /></label><label>价格预算 USD（可选）<input name="price_budget_usd" type="number" min="0" step="0.01" placeholder="例如 5" /></label></div><div class="form-row"><label>估算单价 USD / 1K token<input name="price_per_1k_tokens" type="number" min="0" step="0.0001" placeholder="例如 0.01" /></label><label>网络失败最大重试<input name="max_attempts" type="number" min="1" value="3" /></label></div><div class="form-row"><label class="check-label"><input name="retry_on_network" type="checkbox" checked /> 网络波动自动重试</label><label class="check-label"><input name="retry_on_quota" type="checkbox" checked /> 配额耗尽等待恢复</label></div><label>要发送的消息<textarea name="message" rows="3" required>继续之前的任务；先检查当前状态，再从上次停下的位置继续。</textarea><div class="dialog-actions"><button type="button" class="button ghost" id="cancel-dialog">取消</button><button class="button" value="default">创建计划</button></div></form></dialog>
+  <div id="toast" class="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

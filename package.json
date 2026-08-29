@@ -1,0 +1,38 @@
+{
+  "name": "auto-codex-companion",
+  "version": "0.1.0",
+  "description": "Local background control plane for Codex queues, usage limits and resumable tasks",
+  "homepage": "https://github.com/auto-codex-companion/auto-codex-companion",
+  "author": { "name": "Auto Codex Companion", "email": "opensource@example.com" },
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder --publish never",
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:win": "electron-builder --win --x64 --publish never",
+    "dist:linux": "electron-builder --linux --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "local.autocodex.companion",
+    "productName": "Auto Codex Companion",
+    "asar": true,
+    "files": ["electron/**/*", "package.json"],
+    "extraResources": [
+      { "from": "app.py", "to": "backend/app.py" },
+      { "from": "launcher.py", "to": "backend/launcher.py" },
+      { "from": "static", "to": "backend/static" },
+      { "from": "README.md", "to": "backend/README.md" }
+    ],
+    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
+    "win": { "target": ["nsis"], "artifactName": "Auto-Codex-Companion-Setup-${version}-${arch}.${ext}" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true },
+    "linux": { "target": ["AppImage", "deb"], "category": "Development", "maintainer": "opensource@example.com", "desktopName": "auto-codex-companion" },
+    "publish": null
+  }
+}
