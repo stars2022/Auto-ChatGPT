@@ -299,7 +299,7 @@ def official_usage_probe() -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=15) as response:
             raw = response.read(4_000_000)
             data = json.loads(raw.decode("utf-8"))
-            # cc-switch-compatible projection of the two official rate-limit windows.
+            # Project the two official rate-limit windows into a compact, safe shape.
             windows = []
             rate_limit = data.get("rate_limit") if isinstance(data, dict) else None
             if isinstance(rate_limit, dict):

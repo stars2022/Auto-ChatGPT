@@ -32,6 +32,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: python -m pip install --upgrade pip pyinstaller
+      - run: python scripts/build_backend.py
       - run: npm install
       - run: npm run dist:${{ matrix.target }}
       - uses: actions/upload-artifact@v4

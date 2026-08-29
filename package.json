@@ -9,6 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "build:backend": "python scripts/build_backend.py",
     "dist": "electron-builder --publish never",
     "dist:mac": "electron-builder --mac --publish never",
     "dist:win": "electron-builder --win --x64 --publish never",
@@ -23,6 +24,7 @@
     "productName": "Auto Codex Companion",
     "asar": true,
     "files": ["electron/**/*", "package.json"],
+    "afterPack": "electron/after-pack.js",
     "extraResources": [
       { "from": "app.py", "to": "backend/app.py" },
       { "from": "launcher.py", "to": "backend/launcher.py" },

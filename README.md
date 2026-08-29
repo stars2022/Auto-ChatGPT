@@ -44,6 +44,8 @@ npm run dist:linux   # x64 AppImage + .deb
 
 产物会出现在 `dist/`。`.github/workflows/build.yml` 提供 macOS、Windows、Ubuntu 三平台构建；推送 `v*` 标签后会自动创建 GitHub Release 并上传安装包。
 
+GitHub Actions 会在目标系统用 PyInstaller 生成原生后台二进制并嵌入安装包，因此正式发布的安装包不要求用户另装 Python。直接在另一平台交叉构建时若没有对应平台二进制，Electron 会回退到系统的 `python3`（Windows 为 `py -3`）。
+
 可用环境变量：`CODEX_HOME`、`AUTOCODEX_DATA_DIR`、`AUTOCODEX_PORT`、`AUTOCODEX_POLL_SECONDS`。
 
 ## 额度规则
@@ -57,9 +59,9 @@ npm run dist:linux   # x64 AppImage + .deb
 
 `/status` 通常是提供商的网页健康页，不是额度接口。当前本机 Pixel API 的 `/status` 返回 HTTP 200 HTML；真正的余额数据在 `/v1/usage`。
 
-## 与 cc-switch 的取舍
+## 额度接口安全边界
 
-参考了 cc-switch 的官方 Codex 查询逻辑（OAuth-only、`wham/usage`、窗口映射、账户 ID header、保守轮询），但没有复制其代码，也没有执行任意 JavaScript extractor。第三方接口使用固定字段提取器，避免把远程脚本当成本地代码执行。
+官方订阅探针只接受 OAuth 凭据，使用固定的 `wham/usage` 端点、账户 ID 请求头和保守轮询，并将响应投影为脱敏的窗口摘要。第三方接口使用固定字段提取器，不执行任意 JavaScript，避免把远程脚本当成本地代码执行。
 
 ## 安全边界
 

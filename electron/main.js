@@ -18,9 +18,19 @@ function pythonCommand() {
   return process.env.AUTOCODEX_PYTHON || 'python3';
 }
 
+function bundledBackend() {
+  if (!app.isPackaged) return null;
+  const name = process.platform === 'win32' ? 'autocodex-backend.exe' : 'autocodex-backend';
+  const candidate = path.join(process.resourcesPath, 'backend', name);
+  return require('fs').existsSync(candidate) ? candidate : null;
+}
+
 function startBackend() {
   const root = backendRoot();
-  backend = spawn(pythonCommand(), [path.join(root, 'app.py')], {
+  const nativeBackend = bundledBackend();
+  const command = nativeBackend || pythonCommand();
+  const args = nativeBackend ? [] : [path.join(root, 'app.py')];
+  backend = spawn(command, args, {
     cwd: root,
     env: { ...process.env, AUTOCODEX_OPEN_BROWSER: '0', AUTOCODEX_HOST: '127.0.0.1', AUTOCODEX_PORT: String(PORT) },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -29,7 +39,8 @@ function startBackend() {
   backend.stdout.on('data', (data) => console.log(`[backend] ${data}`));
   backend.stderr.on('data', (data) => console.error(`[backend] ${data}`));
   backend.on('error', (error) => {
-    dialog.showErrorBox('Auto Codex Companion', `无法启动后台服务：${error.message}\n请安装 Python 3.10+ 后重试。`);
+    const hint = nativeBackend ? '请重新安装应用或查看日志。' : '请安装 Python 3.10+ 后重试。';
+    dialog.showErrorBox('Auto Codex Companion', `无法启动后台服务：${error.message}\n${hint}`);
   });
 }
 
