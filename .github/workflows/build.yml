@@ -12,10 +12,17 @@ jobs:
         include:
           - os: macos-latest
             target: mac
+            artifacts: |
+              dist/*.dmg
+              dist/*.zip
           - os: windows-latest
             target: win
+            artifacts: dist/*.exe
           - os: ubuntu-latest
             target: linux
+            artifacts: |
+              dist/*.AppImage
+              dist/*.deb
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +37,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: auto-codex-companion-${{ matrix.target }}
-          path: release/*
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
