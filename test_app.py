@@ -43,6 +43,39 @@ class AppLogicTests(unittest.TestCase):
         self.assertEqual([w["name"] for w in result["windows"]], ["5_hour", "7_day"])
         self.assertNotIn("account_id", result["data"])
 
+    def test_restore_goal_unarchives_before_queueing(self):
+        class Completed:
+            returncode = 0
+            stdout = "restored"
+            stderr = ""
+
+        with patch.object(app, "get_thread_rows", return_value=[{"id": "thread-1", "archived": 1}]), \
+             patch.object(app, "codex_command", return_value="/usr/local/bin/codex"), \
+             patch.object(app.subprocess, "run", return_value=Completed()) as run, \
+             patch.object(app, "enqueue", return_value=(True, "queued")) as enqueue:
+            ok, detail = app.restore_goal("thread-1", "继续")
+        self.assertTrue(ok)
+        self.assertEqual(detail, "queued")
+        run.assert_called_once_with(["/usr/local/bin/codex", "unarchive", "thread-1"], capture_output=True, text=True, timeout=20)
+        enqueue.assert_called_once_with("thread-1", "继续")
+
+    def test_https_context_requires_certificate_verification(self):
+        self.assertEqual(app.HTTPS_CONTEXT.verify_mode, app.ssl.CERT_REQUIRED)
+
+    def test_projects_group_threads_by_working_directory(self):
+        rows = [
+            {"id": "a", "cwd": "/tmp/alpha", "tokens_used": 100, "goal_status": "active", "updated_at": "2026-01-01T00:00:00+00:00"},
+            {"id": "b", "cwd": "/tmp/alpha", "tokens_used": 50, "goal_status": "usage_limited", "updated_at": "2026-01-02T00:00:00+00:00"},
+            {"id": "c", "cwd": "/tmp/beta", "tokens_used": 10, "goal_status": "complete", "updated_at": "2026-01-03T00:00:00+00:00"},
+        ]
+        with patch.object(app, "get_thread_rows", return_value=rows):
+            projects = app.get_project_rows()
+        alpha = next(item for item in projects if item["cwd"] == "/tmp/alpha")
+        self.assertEqual(alpha["thread_count"], 2)
+        self.assertEqual(alpha["tokens_used"], 150)
+        self.assertEqual(alpha["active"], 1)
+        self.assertEqual(alpha["limited"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

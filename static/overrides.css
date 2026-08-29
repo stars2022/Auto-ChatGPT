@@ -1,0 +1,62 @@
+/* Window chrome, fixed navigation and app-drawn menus. */
+html,body{height:100%;overflow:hidden}
+body{background:radial-gradient(1000px 600px at 76% -16%,#263b25 0%,transparent 62%),var(--bg)}
+.app-shell{height:100vh;min-height:0;display:block}
+.sidebar{position:fixed;z-index:20;inset:0 auto 0 0;width:246px;height:100vh;overflow-y:auto;padding-top:58px}
+.content-shell{height:100vh;max-width:none;margin-left:246px;padding:0 42px 36px;overflow-y:auto}
+.app-menubar{height:46px;display:flex;align-items:center;gap:3px;position:sticky;top:0;z-index:10;background:linear-gradient(180deg,#0a0d12f5 0%,#0a0d12d9 74%,transparent 100%);-webkit-app-region:drag}
+.app-menu-trigger{border:0;background:transparent;color:var(--muted);padding:6px 10px;border-radius:7px;font-size:11px;-webkit-app-region:no-drag}
+.app-menu-trigger span{font-size:12px;margin-left:4px;color:#647080}
+.app-menu-trigger:hover,.app-menu-trigger:focus{background:#1a232d;color:var(--text);outline:none}
+.app-menu-spacer{flex:1}
+.app-menu-status{font:10px "DM Mono",monospace;color:var(--muted);padding-right:3px;-webkit-app-region:no-drag}
+.app-menu-status .pulse{display:inline-block;width:6px;height:6px;margin-right:3px}
+.topbar{padding-top:3px;margin-bottom:28px}
+.sidebar-collapsed .sidebar{width:76px;padding-left:8px;padding-right:8px}
+.sidebar-collapsed .content-shell{margin-left:76px}
+.sidebar-collapsed .brand>div:last-child,.sidebar-collapsed .nav-item{font-size:0}
+.sidebar-collapsed .nav-item{justify-content:center;padding-left:7px;padding-right:7px}
+.sidebar-collapsed .nav-item span{font-size:18px}
+.sidebar-collapsed .sidebar-help,.sidebar-collapsed .connection strong,.sidebar-collapsed .connection small{display:none}
+.sidebar-collapsed .connection{justify-content:center;padding:12px 6px}
+.app-menu-popover,.floating-menu{position:fixed;z-index:80;min-width:170px;padding:5px;background:#151d26;border:1px solid #34414e;border-radius:10px;box-shadow:0 18px 50px #000b}
+.app-menu-popover button,.floating-menu button{display:block;width:100%;border:0;background:transparent;color:var(--text);text-align:left;padding:9px 11px;border-radius:7px;font-size:12px}
+.app-menu-popover button:hover,.floating-menu button:hover{background:#25323e;color:var(--accent)}
+.floating-menu{min-width:178px}
+.project-panel .panel-heading{align-items:center}
+.search-field{position:relative;display:block;min-width:220px}
+.search-field span{position:absolute;left:10px;top:8px;color:var(--muted);font-size:16px}
+.search-field input{padding-left:29px;font-size:12px}
+.project-list{display:flex;flex-direction:column;gap:9px}
+.project-group{border:1px solid var(--line);border-radius:12px;background:#0e141b;overflow:hidden}
+.project-group[open]{border-color:#3a5039;background:#101820}
+.project-group>summary{list-style:none;cursor:pointer}
+.project-group>summary::-webkit-details-marker{display:none}
+.project-summary{display:flex;align-items:center;gap:11px;padding:13px 14px}
+.project-folder{width:30px;height:30px;display:grid;place-items:center;border-radius:8px;background:#1b2a1b;color:var(--accent);font-size:16px;flex:0 0 auto}
+.project-summary-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.project-summary-main strong{font-size:13px}
+.project-summary-main span{font:10px "DM Mono",monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.project-summary-stats{display:flex;align-items:center;gap:9px;font:10px "DM Mono",monospace;color:var(--muted);white-space:nowrap}
+.project-summary-stats b{font-weight:500}
+.project-active{color:var(--accent)}
+.project-limited{color:var(--orange)}
+.project-threads{border-top:1px solid #27323d;padding:7px 10px 9px;display:flex;flex-direction:column;gap:5px}
+.project-thread{display:flex;align-items:center;gap:9px;padding:9px 7px 9px 9px;border-radius:8px}
+.project-thread:hover{background:#17212a}
+.project-thread.archived{opacity:.72}
+.project-thread-main{min-width:0;flex:1}
+.project-thread-meta{display:flex;align-items:center;gap:8px;margin-top:5px;font:10px "DM Mono",monospace;color:var(--muted);white-space:nowrap;overflow:hidden}
+.project-thread-meta>span:not(.status){overflow:hidden;text-overflow:ellipsis}
+.archived-label{color:var(--blue)}
+.project-thread-actions{display:flex;gap:5px;align-items:center}
+.thread-more{font-size:17px;line-height:12px;padding:5px 8px}
+.recent-thread-details{padding:17px 21px}
+.recent-thread-details>summary{display:flex;align-items:center;justify-content:space-between;list-style:none}
+.recent-thread-details>summary::-webkit-details-marker{display:none}
+.recent-thread-details>summary .eyebrow{margin:0 0 4px}
+.recent-thread-details>summary strong{font-size:16px;color:var(--text)}
+.recent-thread-details[open]>summary{margin-bottom:17px}
+@media(max-width:1100px){.content-shell{margin-left:210px;padding-left:25px;padding-right:25px}.sidebar{width:210px}.sidebar-collapsed .content-shell{margin-left:76px}.search-field{min-width:180px}.project-summary-stats{gap:5px}}
+@media(max-width:800px){.sidebar{width:68px;flex-basis:68px;padding-top:50px}.content-shell{margin-left:68px;padding:0 17px 24px}.app-menu-status{display:none}.app-menubar{height:42px}.topbar{margin-bottom:22px}.project-summary-stats{display:none}.search-field{min-width:150px}.sidebar-collapsed .content-shell{margin-left:68px}}
+@media(max-width:530px){.app-menubar{gap:0}.app-menu-trigger{padding:6px 7px;font-size:10px}.project-panel .panel-heading{display:block}.search-field{margin-top:12px;min-width:0}.project-summary{padding:11px}.project-thread-meta{gap:5px}.project-thread-meta>span:nth-of-type(n+3){display:none}.project-thread-actions .restore-goal{font-size:0}.project-thread-actions .restore-goal:after{content:'恢复';font-size:11px}.recent-thread-details{padding:15px 13px}.content-shell{padding-left:12px;padding-right:12px}}

@@ -1,6 +1,9 @@
 const $ = (selector) => document.querySelector(selector);
 let overview = null;
 let activeTab = 'overview';
+let projectQuery = '';
+let contextThreadId = '';
+const expandedProjects = new Set();
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[c]));
 const fmtTime = (value) => { if (!value) return '—'; try { return new Intl.DateTimeFormat('zh-CN', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }).format(new Date(value)); } catch { return value; } };
@@ -68,9 +71,46 @@ function renderHero() {
 function renderActiveTasks() {
   const activeThreads = (overview.threads || []).filter((t) => ['active','usage_limited','blocked'].includes(t.goal_status)).slice(0, 7);
   const schedules = (overview.schedules || []).filter((s) => s.enabled).slice(0, 7);
-  const items = activeThreads.length ? activeThreads.map((t) => `<div class="active-task"><span class="task-dot ${t.goal_status === 'usage_limited' ? 'limited' : ''}"></span><div class="active-task-main"><div class="active-task-name" title="${esc(t.title)}">${esc(t.title || '未命名线程')}</div><div class="active-task-meta">${esc(statusLabel(t.goal_status))} · ${fmtTokens(t.tokens_used)} tokens · ${esc(t.model || '默认模型')}</div></div><button class="mini enqueue" data-id="${esc(t.id)}">继续</button></div>`).join('') : schedules.map((s) => `<div class="active-task"><span class="task-dot ${s.waiting_for_quota ? 'limited' : ''}"></span><div class="active-task-main"><div class="active-task-name">${esc(s.name)}</div><div class="active-task-meta">${esc(s.waiting_for_quota ? '等待额度恢复' : '自动任务已启用')} · ${esc(s.kind === 'interval' ? `每 ${s.interval_minutes} 分钟` : s.kind === 'at_time' ? `指定时间 ${fmtTime(s.run_at)}` : '额度恢复')}</div></div></div>`).join('');
+  const items = activeThreads.length ? activeThreads.map((t) => `<div class="active-task"><span class="task-dot ${t.goal_status === 'usage_limited' ? 'limited' : ''}"></span><div class="active-task-main"><div class="active-task-name" title="${esc(t.title)}">${esc(t.title || '未命名线程')}</div><div class="active-task-meta">${esc(statusLabel(t.goal_status))} · ${fmtTokens(t.tokens_used)} tokens · ${esc(t.model || '默认模型')}</div></div><button class="mini restore-goal" data-id="${esc(t.id)}">恢复目标</button></div>`).join('') : schedules.map((s) => `<div class="active-task"><span class="task-dot ${s.waiting_for_quota ? 'limited' : ''}"></span><div class="active-task-main"><div class="active-task-name">${esc(s.name)}</div><div class="active-task-meta">${esc(s.waiting_for_quota ? '等待额度恢复' : '自动任务已启用')} · ${esc(s.kind === 'interval' ? `每 ${s.interval_minutes} 分钟` : s.kind === 'at_time' ? `指定时间 ${fmtTime(s.run_at)}` : '额度恢复')}</div></div></div>`).join('');
   $('#active-tasks').innerHTML = items || '<div class="empty">暂无运行中的线程。添加一个自动任务开始。</div>';
-  document.querySelectorAll('.enqueue').forEach((button) => { button.onclick = () => quickEnqueue(button.dataset.id); });
+  document.querySelectorAll('.restore-goal').forEach((button) => { button.onclick = () => resumeGoal(button.dataset.id); });
+}
+
+function projectMatches(project) {
+  if (!projectQuery) return true;
+  const needle = projectQuery.toLowerCase();
+  return [project.name, project.cwd, ...(project.threads || []).flatMap((thread) => [thread.title, thread.id, thread.objective])]
+    .some((value) => String(value || '').toLowerCase().includes(needle));
+}
+
+function projectThreadMarkup(thread) {
+  const title = thread.title || '未命名线程';
+  const status = statusLabel(thread.goal_status);
+  const archived = Boolean(thread.archived);
+  return `<div class="project-thread ${archived ? 'archived' : ''}">
+    <span class="task-dot ${thread.goal_status === 'usage_limited' ? 'limited' : ''}"></span>
+    <div class="project-thread-main"><div class="thread-title" title="${esc(title)}">${esc(title)}</div><div class="project-thread-meta"><span class="status ${statusClass(thread.goal_status)}">${esc(status)}</span><span>${fmtTokens(thread.tokens_used)} tokens</span><span>${esc(thread.model || '默认模型')}</span><span>${esc(fmtTime(thread.updated_at))}</span>${archived ? '<span class="archived-label">已归档</span>' : ''}</div></div>
+    <div class="project-thread-actions"><button class="mini restore-goal" data-id="${esc(thread.id)}">恢复目标</button><button class="mini thread-more" data-id="${esc(thread.id)}" aria-label="更多操作">⋯</button></div>
+  </div>`;
+}
+
+function renderProjects() {
+  const projects = (overview?.projects || []).filter(projectMatches);
+  const list = $('#project-list');
+  if (!list) return;
+  if (!projects.length) { list.innerHTML = '<div class="empty">没有匹配的项目或线程。</div>'; return; }
+  const activeProject = projects.find((project) => (project.threads || []).some((thread) => ['active', 'usage_limited'].includes(thread.goal_status)));
+  if (!expandedProjects.size && activeProject) expandedProjects.add(activeProject.id);
+  list.innerHTML = projects.map((project) => {
+    const isOpen = expandedProjects.has(project.id) || Boolean(projectQuery);
+    const threads = projectQuery ? project.threads.filter((thread) => [thread.title, thread.id, thread.objective, thread.cwd].some((value) => String(value || '').toLowerCase().includes(projectQuery.toLowerCase()))) : project.threads;
+    return `<details class="project-group" data-project-id="${esc(project.id)}" ${isOpen ? 'open' : ''}><summary><div class="project-summary"><span class="project-folder">⌂</span><div class="project-summary-main"><strong>${esc(project.name)}</strong><span title="${esc(project.cwd)}">${esc(project.cwd)}</span></div><div class="project-summary-stats"><span>${project.thread_count} 线程</span><span>${fmtTokens(project.tokens_used)} tokens</span>${project.active ? `<b class="project-active">${project.active} 运行中</b>` : ''}${project.limited ? `<b class="project-limited">${project.limited} 受限</b>` : ''}</div></div></summary><div class="project-threads">${threads.length ? threads.map(projectThreadMarkup).join('') : '<div class="empty">项目中没有匹配线程。</div>'}</div></details>`;
+  }).join('');
+  document.querySelectorAll('.project-group').forEach((group) => {
+    group.addEventListener('toggle', () => group.open ? expandedProjects.add(group.dataset.projectId) : expandedProjects.delete(group.dataset.projectId));
+  });
+  document.querySelectorAll('.restore-goal').forEach((button) => { button.onclick = () => resumeGoal(button.dataset.id); });
+  document.querySelectorAll('.thread-more').forEach((button) => { button.onclick = (event) => showContextMenu(event, button.dataset.id); });
 }
 
 function renderQuotaBars() {
@@ -92,8 +132,8 @@ function renderQuota() {
 
 function renderThreads() {
   const rows = overview.threads || [];
-  $('#threads').innerHTML = rows.length ? rows.slice(0, 60).map((t) => `<tr><td><div class="thread-title" title="${esc(t.title)}">${esc(t.title || '未命名线程')}</div><div class="thread-path" title="${esc(t.cwd)}">${esc(t.cwd || '')}</div></td><td><span class="status ${statusClass(t.goal_status)}">${esc(statusLabel(t.goal_status))}</span></td><td class="muted">${fmtTokens(t.tokens_used)}</td><td class="muted">${esc(t.model || '—')}</td><td class="muted">${esc(fmtTime(t.updated_at))}</td><td><button class="mini enqueue" data-id="${esc(t.id)}">继续</button></td></tr>`).join('') : '<tr><td colspan="6" class="empty">未找到线程数据库或线程记录。</td></tr>';
-  document.querySelectorAll('.enqueue').forEach((button) => { button.onclick = () => quickEnqueue(button.dataset.id); });
+  $('#threads').innerHTML = rows.length ? rows.slice(0, 60).map((t) => `<tr><td><div class="thread-title" title="${esc(t.title)}">${esc(t.title || '未命名线程')}</div><div class="thread-path" title="${esc(t.cwd)}">${esc(t.cwd || '')}</div></td><td><span class="status ${statusClass(t.goal_status)}">${esc(statusLabel(t.goal_status))}</span></td><td class="muted">${fmtTokens(t.tokens_used)}</td><td class="muted">${esc(t.model || '—')}</td><td class="muted">${esc(fmtTime(t.updated_at))}</td><td><button class="mini restore-goal" data-id="${esc(t.id)}">恢复目标</button></td></tr>`).join('') : '<tr><td colspan="6" class="empty">未找到线程数据库或线程记录。</td></tr>';
+  document.querySelectorAll('.restore-goal').forEach((button) => { button.onclick = () => resumeGoal(button.dataset.id); });
 }
 
 function renderTasks() {
@@ -110,14 +150,84 @@ function renderEvents() { const rows = overview.events || []; $('#events').inner
 function renderInventory() { const rows = overview.inventory?.files || []; $('#inventory-list').innerHTML = rows.map((f) => `<div class="inventory-row ${f.exists ? '' : 'missing'}"><div><div>${esc(f.label)} ${f.sensitive ? '· <span class="muted">敏感</span>' : ''}</div><div class="path" title="${esc(f.path)}">${esc(f.path)}</div></div><div class="size">${f.exists ? `${(f.size / 1024).toFixed(1)} KB` : '缺失'}</div></div>`).join(''); const cfg = overview.inventory?.config || []; $('#config-keys').innerHTML = cfg.map((k) => k.key ? `<span class="key ${k.sensitive ? 'sensitive' : ''}">${esc(k.section === '(root)' ? k.key : `${k.section}.${k.key}`)}${k.sensitive ? ' · 脱敏' : ''}</span>` : '').join(''); }
 function renderUsageConfig() { const config = overview.usage_config || {}; const probe = overview.usage_probe || {}; const form = $('#usage-form'); form.base_url.value = config.base_url || ''; form.path.value = config.path || '/v1/usage'; form.unit.value = config.unit || 'USD'; form.poll_minutes.value = config.poll_minutes || 5; const pill = $('#usage-pill'); pill.className = `pill ${config.api_key_configured ? 'good' : 'neutral'}`; pill.textContent = config.auto_from_codex ? '从 Codex 配置' : config.api_key_configured ? '已配置' : '未配置'; const result = $('#usage-result'); if (probe.status && probe.status !== 'not_configured' && probe.status !== 'not_checked') { result.classList.remove('hidden'); const stale = probe.status === 'ok' ? '' : probe.last_good ? `\n上次成功余额：${probe.last_good.remaining ?? '—'} ${probe.last_good.unit || config.unit || ''}` : ''; result.textContent = probe.status === 'ok' ? `接口：${config.base_url}${config.path}\n余额：${probe.remaining ?? '—'} ${probe.unit || config.unit || ''}\n检查时间：${probe.checked_at}` : `接口状态：${probe.status}\n${probe.detail || ''}${stale}`; } }
 function renderSettings() { const settings = overview.settings || {}; const form = $('#settings-form'); form.poll_seconds.value = settings.poll_seconds || 15; form.official_poll_minutes.value = settings.official_poll_minutes || 5; form.default_network_retries.value = settings.default_network_retries ?? 0; form.default_backoff_seconds.value = settings.default_backoff_seconds || 30; form.notifications.checked = settings.notifications !== false; }
-function renderAll() { renderMetrics(); renderHero(); renderActiveTasks(); renderQuota(); renderThreads(); renderTasks(); renderEvents(); renderInventory(); renderUsageConfig(); renderSettings(); }
+function renderAll() { renderMetrics(); renderHero(); renderActiveTasks(); renderQuota(); renderProjects(); renderThreads(); renderTasks(); renderEvents(); renderInventory(); renderUsageConfig(); renderSettings(); }
 
 async function load() { try { overview = await api('/api/overview'); renderAll(); } catch (error) { $('#last-sync').textContent = '连接失败'; toast(error.message); } }
-async function quickEnqueue(threadId) { const message = prompt('发送给这个线程的继续消息：', '继续之前的任务；先检查当前状态，再从上次停下的位置继续。'); if (!message) return; try { const result = await api('/api/enqueue', { method:'POST', body:JSON.stringify({ thread_id:threadId, message }) }); toast(result.detail || '已加入队列'); load(); } catch (error) { toast(error.message); } }
-function openSchedule() { const select = $('#thread-select'); select.innerHTML = (overview.threads || []).filter((thread) => thread.id).map((thread) => `<option value="${esc(thread.id)}">${esc(thread.title || thread.id.slice(0, 12))} · ${esc(statusLabel(thread.goal_status))}</option>`).join(''); if (!select.options.length) { toast('没有可用线程'); switchTab('tasks'); return; } $('#schedule-dialog').showModal(); }
+async function resumeGoal(threadId) {
+  closeFloatingMenus();
+  const message = prompt('恢复目标时发送给线程的消息：', '继续之前的任务；先检查当前状态，再从上次停下的位置继续。');
+  if (!message) return;
+  try {
+    const result = await api('/api/goals/resume', { method:'POST', body:JSON.stringify({ thread_id:threadId, message }) });
+    toast(result.unarchived ? '线程已恢复并加入队列' : '目标已恢复并加入队列');
+    load();
+  } catch (error) { toast(`恢复失败：${error.message}`); }
+}
+
+function showContextMenu(event, threadId) {
+  event.stopPropagation();
+  closeFloatingMenus();
+  contextThreadId = threadId;
+  const menu = $('#task-context-menu');
+  const rect = event.currentTarget.getBoundingClientRect();
+  menu.style.left = `${Math.min(window.innerWidth - 190, Math.max(12, rect.right - 178))}px`;
+  menu.style.top = `${Math.min(window.innerHeight - 150, rect.bottom + 6)}px`;
+  menu.classList.remove('hidden');
+}
+
+function closeFloatingMenus() {
+  document.querySelectorAll('.app-menu-popover, .floating-menu').forEach((menu) => menu.classList.add('hidden'));
+}
+
+function openSchedule(threadId = '') {
+  closeFloatingMenus();
+  const select = $('#thread-select');
+  select.innerHTML = (overview.threads || []).filter((thread) => thread.id).map((thread) => `<option value="${esc(thread.id)}">${esc(thread.title || thread.id.slice(0, 12))} · ${esc(statusLabel(thread.goal_status))}</option>`).join('');
+  if (!select.options.length) { toast('没有可用线程'); switchTab('tasks'); return; }
+  if (threadId && [...select.options].some((option) => option.value === threadId)) select.value = threadId;
+  $('#schedule-dialog').showModal();
+}
+
+function runMenuAction(action) {
+  closeFloatingMenus();
+  if (action === 'resume' && contextThreadId) return resumeGoal(contextThreadId);
+  if (action === 'schedule') return openSchedule(contextThreadId);
+  if (action === 'copy-id' && contextThreadId) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(contextThreadId).then(() => toast('线程 ID 已复制')).catch(() => toast(contextThreadId));
+    return toast(contextThreadId);
+  }
+  if (action === 'new-task') return openSchedule();
+  if (action === 'check-official') { switchTab('quota'); return $('#official-check').click(); }
+  if (action === 'scan-config') { switchTab('settings'); const detail = document.querySelector('.about-panel details'); if (detail) detail.open = true; return toast('配置清单已展开'); }
+  if (action === 'refresh') return load();
+  if (action === 'toggle-sidebar') { document.body.classList.toggle('sidebar-collapsed'); return; }
+  if (action === 'about') { switchTab('settings'); return; }
+  if (action === 'events') { switchTab('events'); return; }
+  if (action === 'go-overview') return switchTab('overview');
+  if (action === 'go-tasks') return switchTab('tasks');
+  if (action === 'go-quota') return switchTab('quota');
+}
 
 document.querySelectorAll('[data-tab]').forEach((button) => { button.onclick = () => switchTab(button.dataset.tab); });
 document.querySelectorAll('[data-go-tab]').forEach((button) => { button.onclick = () => switchTab(button.dataset.goTab); });
+document.querySelectorAll('.app-menu-trigger').forEach((button) => {
+  button.onclick = (event) => {
+    event.stopPropagation();
+    const target = document.getElementById(button.dataset.menu);
+    const wasHidden = target.classList.contains('hidden');
+    closeFloatingMenus();
+    if (wasHidden) {
+      const rect = button.getBoundingClientRect();
+      target.style.left = `${Math.max(10, rect.left)}px`;
+      target.style.top = `${rect.bottom + 6}px`;
+      target.classList.remove('hidden');
+    }
+  };
+});
+document.querySelectorAll('.app-menu-popover button, .floating-menu button').forEach((button) => { button.onclick = () => runMenuAction(button.dataset.action); });
+document.addEventListener('click', (event) => { if (!event.target.closest('.app-menu-popover, .floating-menu, .app-menu-trigger, .thread-more')) closeFloatingMenus(); });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeFloatingMenus(); });
+$('#project-search').addEventListener('input', (event) => { projectQuery = event.target.value.trim(); renderProjects(); });
 $('#refresh').onclick = load; $('#top-new-task').onclick = openSchedule; $('#hero-add-task').onclick = openSchedule; $('#quick-new-task').onclick = openSchedule; $('#new-schedule').onclick = openSchedule;
 $('#hero-check-quota').onclick = () => { switchTab('quota'); $('#official-check').click(); }; $('#quick-check-official').onclick = () => { switchTab('quota'); $('#official-check').click(); }; $('#quick-scan').onclick = () => { switchTab('settings'); toast('配置清单已移至设置 → 关于与诊断'); document.querySelector('.about-panel details').open = true; };
 $('#close-dialog').onclick = () => $('#schedule-dialog').close(); $('#cancel-dialog').onclick = () => $('#schedule-dialog').close(); $('#schedule-kind').onchange = (event) => { $('#interval-field').classList.toggle('hidden', event.target.value !== 'interval'); $('#time-field').classList.toggle('hidden', event.target.value !== 'at_time'); };

@@ -55,7 +55,7 @@ GitHub Actions 会在目标系统用 PyInstaller 生成原生后台二进制并�
 ## 额度规则
 
 - **官方订阅**：只有 `~/.codex/auth.json` 中出现 `auth_mode: "chatgpt"` 且有 `tokens.access_token` 时才会请求 `https://chatgpt.com/backend-api/wham/usage`。请求会带 `ChatGPT-Account-Id`（如果凭据提供）并按 5 小时/7 天/30 天窗口解析 `rate_limit.primary_window` 与 `secondary_window`。也会尝试 macOS Keychain 的 `Codex Auth` 项。
-- **第三方提供商**：不会使用官方订阅端点。若检测到 `config.toml` 的 `[model_providers.custom] base_url` 和 API key 模式的 `auth.json`，面板会自动把它作为第三方探针，默认请求 `${base_url}/v1/usage`，按 `remaining → quota.remaining → balance` 提取余额；也可以在面板里改路径并设置轮询间隔。
+- **第三方提供商**：不会使用官方订阅端点。若检测到 `config.toml` 的 `[model_providers.custom] base_url` 与 bearer token（或 API key 模式的 `auth.json`），面板会自动把它作为第三方探针，默认请求 `${base_url}/v1/usage`，按 `remaining → quota.remaining → balance` 提取余额；也可以在面板里改路径并设置轮询间隔。
 - **本地兜底**：没有可用接口时，仍会读取 `goals_1.sqlite` 的目标状态；`usage_limited` 变成其他状态时视为恢复信号。
 - **任务预算**：每个计划可设置 token 上限、估算价格上限（USD）和 USD/1K token 单价。达到上限会自动停用计划并在事件流中说明原因。
 - **失败恢复**：网络/超时/502/503/504 默认按指数退避持续重试（最大退避 6 小时；将最大重试次数设为大于 0 可限制次数）；429、quota、usage limit 会挂起计划，等待官方窗口、第三方余额或本地 `usage_limited` 状态恢复后继续。
@@ -71,4 +71,4 @@ GitHub Actions 会在目标系统用 PyInstaller 生成原生后台二进制并�
 
 - `auth.json` 只读取到内存，用于发起本地用户主动启用的请求；接口响应会做字段脱敏。
 - 面板 API 只绑定 `127.0.0.1`，计划数据放在 `~/.autocodex/state.json`。
-- 面板不会直接修改 Codex 的 SQLite 数据库；继续操作仅调用公开 CLI 子命令 `codex queue`。
+- 面板不会直接修改 Codex 的 SQLite 数据库；继续操作仅调用公开 CLI 子命令 `codex unarchive`（需要时）和 `codex queue`。

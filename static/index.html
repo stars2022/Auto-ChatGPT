@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Auto Codex Companion</title>
   <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/overrides.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -23,6 +24,13 @@
     </aside>
 
     <div class="content-shell">
+      <div class="app-menubar" role="menubar" aria-label="应用菜单">
+        <button class="app-menu-trigger" data-menu="workspace-menu" role="menuitem">工作区 <span>⌄</span></button>
+        <button class="app-menu-trigger" data-menu="actions-menu" role="menuitem">操作 <span>⌄</span></button>
+        <button class="app-menu-trigger" data-menu="view-menu" role="menuitem">视图 <span>⌄</span></button>
+        <button class="app-menu-trigger" data-menu="help-menu" role="menuitem">帮助 <span>⌄</span></button>
+        <div class="app-menu-spacer"></div><span class="app-menu-status"><span class="pulse"></span> 本地运行</span>
+      </div>
       <header class="topbar"><div><p class="eyebrow accent">CODEx / CHATGPT AUTOMATION</p><h2 id="page-title">运行总览</h2></div><div class="top-actions"><span id="last-sync" class="muted">正在连接…</span><button class="button ghost" id="refresh">刷新</button><button class="button" id="top-new-task">＋ 添加任务</button></div></header>
 
       <main>
@@ -43,7 +51,8 @@
           <div class="section-intro"><div><p class="eyebrow">TASK ORCHESTRATOR</p><h3>任务与自动继续</h3><p class="muted">每个任务绑定一个 Codex 线程，可按时间、固定间隔或额度恢复继续执行。</p></div><button class="button" id="new-schedule">＋ 新建任务</button></div>
           <div class="task-stats" id="task-stats"></div>
           <section class="panel"><div class="panel-heading"><div><p class="eyebrow">AUTOMATIONS</p><h3>已配置任务</h3></div><span class="muted small">失败会持续重试，除非手动暂停</span></div><div id="schedule-list" class="schedule-list"><div class="empty">还没有任务。</div></div></section>
-          <section class="panel"><div class="panel-heading"><div><p class="eyebrow">THREADS</p><h3>最近线程</h3></div><span class="muted small">从本机 Codex 数据库读取</span></div><div class="table-wrap"><table><thead><tr><th>线程</th><th>状态</th><th>Tokens</th><th>模型</th><th>最近更新</th><th></th></tr></thead><tbody id="threads"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody></table></div></section>
+          <section class="panel project-panel"><div class="panel-heading"><div><p class="eyebrow">WORKSPACES</p><h3>按项目查看线程</h3><p class="muted small">先按工作目录归类，展开项目后再选择目标。</p></div><label class="search-field"><span>⌕</span><input id="project-search" type="search" placeholder="搜索项目或线程" /></label></div><div id="project-list" class="project-list"><div class="empty">加载中…</div></div></section>
+          <details class="panel recent-thread-details"><summary><span><p class="eyebrow">THREADS</p><strong>查看最近线程列表</strong></span><span class="muted small">平铺视图（可选）</span></summary><div class="table-wrap"><table><thead><tr><th>线程</th><th>状态</th><th>Tokens</th><th>模型</th><th>最近更新</th><th></th></tr></thead><tbody id="threads"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody></table></div></details>
         </section>
 
         <section class="tab-panel" data-panel="quota">
@@ -63,6 +72,12 @@
       <footer><span>Auto Codex Companion · 本地服务 <code>127.0.0.1</code></span><span>刷新 <code id="poll-label">15s</code></span></footer>
     </div>
   </div>
+
+  <div id="workspace-menu" class="app-menu-popover hidden" role="menu"><button data-action="go-overview">运行总览</button><button data-action="go-tasks">任务工作区</button><button data-action="go-quota">额度与来源</button></div>
+  <div id="actions-menu" class="app-menu-popover hidden" role="menu"><button data-action="new-task">添加自动任务</button><button data-action="check-official">检查官方额度</button><button data-action="scan-config">扫描本机配置</button></div>
+  <div id="view-menu" class="app-menu-popover hidden" role="menu"><button data-action="refresh">刷新数据</button><button data-action="toggle-sidebar">收起 / 展开侧栏</button></div>
+  <div id="help-menu" class="app-menu-popover hidden" role="menu"><button data-action="about">关于与诊断</button><button data-action="events">查看事件记录</button></div>
+  <div id="task-context-menu" class="floating-menu hidden" role="menu"><button data-action="resume">恢复目标</button><button data-action="schedule">添加自动任务</button><button data-action="copy-id">复制线程 ID</button></div>
 
   <dialog id="schedule-dialog"><form method="dialog" id="schedule-form"><div class="dialog-heading"><div><p class="eyebrow">NEW TASK</p><h3>添加自动继续任务</h3></div><button type="button" class="icon-button" id="close-dialog">×</button></div><label>任务名称<input name="name" value="额度恢复后继续" required /></label><label>目标线程<select name="thread_id" id="thread-select" required></select></label><label>触发方式<select name="kind" id="schedule-kind"><option value="quota_recovered">额度恢复（官方 / API / 本地）</option><option value="interval">固定间隔</option><option value="at_time">指定时间</option></select></label><label id="interval-field">间隔分钟<input name="interval_minutes" type="number" min="1" value="60" /></label><label id="time-field" class="hidden">执行时间<input name="run_at" type="datetime-local" /></label><div class="form-row"><label>Token 预算（可选）<input name="token_budget" type="number" min="1" placeholder="例如 200000" /></label><label>价格预算 USD（可选）<input name="price_budget_usd" type="number" min="0" step="0.01" placeholder="例如 5" /></label></div><div class="form-row"><label>估算单价 USD / 1K token<input name="price_per_1k_tokens" type="number" min="0" step="0.0001" placeholder="例如 0.01" /></label><label>网络失败最大重试<input name="max_attempts" type="number" min="0" value="0" /><small>0 = 无限重试</small></label></div><div class="form-row"><label class="check-label"><input name="retry_on_network" type="checkbox" checked /> 网络波动自动重试</label><label class="check-label"><input name="retry_on_quota" type="checkbox" checked /> 配额耗尽等待恢复</label></div><label>要发送的消息<textarea name="message" rows="3" required>继续之前的任务；先检查当前状态，再从上次停下的位置继续。</textarea><div class="dialog-actions"><button type="button" class="button ghost" id="cancel-dialog">取消</button><button class="button" value="default">创建任务</button></div></form></dialog>
   <div id="toast" class="toast"></div>

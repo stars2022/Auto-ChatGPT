@@ -61,7 +61,25 @@ function waitForBackend(attempts = 80) {
 }
 
 function createWindow() {
-  win = new BrowserWindow({ width: 1320, height: 920, minWidth: 920, minHeight: 680, title: 'Auto Codex Companion', backgroundColor: '#0b0e13', webPreferences: { contextIsolation: true, nodeIntegration: false } });
+  const windowOptions = {
+    width: 1320,
+    height: 920,
+    minWidth: 920,
+    minHeight: 680,
+    title: 'Auto Codex Companion',
+    backgroundColor: '#0b0e13',
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  };
+  // Blend the app surface into the macOS title bar.  The web UI owns the
+  // navigation/menu chrome while the native traffic lights remain available.
+  if (process.platform === 'darwin') {
+    windowOptions.titleBarStyle = 'hiddenInset';
+    windowOptions.trafficLightPosition = { x: 18, y: 18 };
+  }
+  win = new BrowserWindow(windowOptions);
+  // The top-level menu is intentionally drawn by the app so it behaves the
+  // same way on macOS, Windows and Linux. The tray keeps its own context menu.
+  Menu.setApplicationMenu(null);
   win.loadURL(`http://127.0.0.1:${PORT}`);
   win.on('close', (event) => {
     if (!quitting) { event.preventDefault(); win.hide(); }

@@ -14,6 +14,7 @@ import plistlib
 import re
 import shutil
 import sqlite3
+import ssl
 import subprocess
 import sys
 import threading
@@ -37,6 +38,32 @@ STATE_FILE = STATE_DIR / "state.json"
 HOST = os.environ.get("AUTOCODEX_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AUTOCODEX_PORT", "8765"))
 POLL_SECONDS = max(5, int(os.environ.get("AUTOCODEX_POLL_SECONDS", "15")))
+
+
+def https_context() -> ssl.SSLContext:
+    """Return a verified TLS context that also works inside PyInstaller bundles.
+
+    Frozen Python builds do not reliably inherit Homebrew/system OpenSSL paths.
+    Prefer certifi's bundled Mozilla roots when present, then fall back to the
+    platform trust store. Never disable certificate verification.
+    """
+    cafile = os.environ.get("SSL_CERT_FILE")
+    try:
+        import certifi  # type: ignore
+        cafile = cafile or certifi.where()
+    except ImportError:
+        pass
+    candidates = [cafile, "/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", "/opt/homebrew/etc/openssl@3/cert.pem", "/opt/homebrew/etc/ca-certificates/cert.pem"]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            try:
+                return ssl.create_default_context(cafile=candidate)
+            except OSError:
+                continue
+    return ssl.create_default_context()
+
+
+HTTPS_CONTEXT = https_context()
 
 
 def now_ms() -> int:
@@ -161,6 +188,30 @@ def codex_provider_base_url() -> str:
     return ""
 
 
+def codex_provider_api_key() -> str:
+    """Read a custom provider bearer token for the third-party usage probe.
+
+    The value is only used in-memory for the outbound request and is never
+    returned by an API response or written to the event log.
+    """
+    path = CODEX_HOME / "config.toml"
+    if not path.exists():
+        return ""
+    section = ""
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            s = line.strip()
+            if s.startswith("["):
+                section = s
+            if section == "[model_providers.custom]" and "=" in s:
+                key, raw = s.split("=", 1)
+                if key.strip() in {"experimental_bearer_token", "api_key", "bearer_token"}:
+                    return raw.strip().strip('"\'')
+    except OSError:
+        pass
+    return ""
+
+
 def effective_usage_config(config: dict[str, Any] | None) -> dict[str, Any]:
     config = dict(config or {})
     # Third-party provider usage is allowed to auto-follow the same base URL and key
@@ -173,6 +224,9 @@ def effective_usage_config(config: dict[str, Any] | None) -> dict[str, Any]:
         if token and kind == "api_key":
             config["api_key"] = token
             config["auto_from_codex"] = True
+    if not config.get("api_key") and codex_provider_api_key():
+        config["api_key"] = codex_provider_api_key()
+        config["auto_from_codex"] = True
     if config.get("auto_from_codex"):
         config["enabled"] = True
     if config.get("base_url") and config.get("api_key") and "enabled" not in config:
@@ -237,6 +291,8 @@ def local_auth_info() -> dict[str, Any]:
             present = True
     if present:
         return {"present": True, "kind": "api_key", "field": "OPENAI_API_KEY"}
+    if codex_provider_api_key():
+        return {"present": True, "kind": "api_key", "field": "model_providers.custom.experimental_bearer_token", "source": "config.toml"}
     return {"present": False, "kind": "none"}
 
 
@@ -247,6 +303,9 @@ def local_auth_token() -> tuple[str | None, str]:
             return str(tokens["access_token"]), "oauth"
         if raw.get("OPENAI_API_KEY"):
             return str(raw["OPENAI_API_KEY"]), "api_key"
+    provider_key = codex_provider_api_key()
+    if provider_key:
+        return provider_key, "api_key"
     return None, "none"
 
 
@@ -296,7 +355,7 @@ def official_usage_probe() -> dict[str, Any]:
     request = urllib.request.Request(url, headers=headers, method="GET")
     checked = iso(now_ms())
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=15, context=HTTPS_CONTEXT) as response:
             raw = response.read(4_000_000)
             data = json.loads(raw.decode("utf-8"))
             # Project the two official rate-limit windows into a compact, safe shape.
@@ -393,6 +452,25 @@ def get_thread_rows() -> list[dict[str, Any]]:
         row["time_used_seconds"] = goal.get("time_used_seconds")
         row["updated_at"] = iso(row.pop("updated_at_ms", None))
     return rows
+
+
+def get_project_rows() -> list[dict[str, Any]]:
+    """Group recent threads by working directory for a readable task view."""
+    groups: dict[str, dict[str, Any]] = {}
+    for thread in get_thread_rows():
+        cwd = str(thread.get("cwd") or "未指定工作区")
+        group = groups.setdefault(cwd, {"id": cwd, "name": Path(cwd).name or cwd, "cwd": cwd, "threads": [], "tokens_used": 0, "active": 0, "limited": 0})
+        group["threads"].append(thread)
+        group["tokens_used"] += max(0, int(thread.get("tokens_used") or 0))
+        if thread.get("goal_status") == "active":
+            group["active"] += 1
+        if thread.get("goal_status") == "usage_limited":
+            group["limited"] += 1
+    projects = list(groups.values())
+    projects.sort(key=lambda item: max((parse_when(str(t.get("updated_at") or "")) or 0) for t in item["threads"]), reverse=True)
+    for project in projects:
+        project["thread_count"] = len(project["threads"])
+    return projects
 
 
 def inventory() -> dict[str, Any]:
@@ -498,7 +576,7 @@ def usage_probe(app: dict[str, Any], force: bool = False) -> dict[str, Any]:
     request = urllib.request.Request(url, headers={"Authorization": "Bearer " + str(config.get("api_key")), "Accept": "application/json"}, method="GET")
     checked = iso(now_ms())
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=10, context=HTTPS_CONTEXT) as response:
             raw = response.read(2_000_000)
             parsed = json.loads(raw.decode("utf-8"))
         remaining = parsed.get("remaining")
@@ -557,6 +635,39 @@ def enqueue(thread_id: str, message: str) -> tuple[bool, str]:
         return False, (completed.stderr or completed.stdout or "codex queue 失败").strip()[:500]
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)
+
+
+def restore_goal(thread_id: str, message: str) -> tuple[bool, str]:
+    """Restore an archived thread, then enqueue a continuation message.
+
+    The CLI owns the session database, so restoration is deliberately performed
+    through ``codex unarchive`` instead of editing SQLite directly.  The
+    continuation is queued only after a successful unarchive (or when the
+    thread was already active).
+    """
+    thread_id = str(thread_id or "").strip()
+    message = str(message or "").strip()
+    if not thread_id or not message:
+        return False, "thread_id 和 message 不能为空"
+    row = next((item for item in get_thread_rows() if item.get("id") == thread_id), None)
+    if row is None:
+        return False, "未找到这个线程，可能已不在最近线程列表中"
+    if row.get("archived"):
+        command = codex_command()
+        if not command:
+            return False, "未找到 codex CLI"
+        try:
+            completed = subprocess.run(
+                [command, "unarchive", thread_id],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if completed.returncode != 0:
+                return False, (completed.stderr or completed.stdout or "恢复线程失败").strip()[:500]
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, str(exc)
+    return enqueue(thread_id, message)
 
 
 def classify_enqueue_error(detail: str) -> str:
@@ -781,10 +892,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/overview":
             app = read_app_state() or default_app_state()
-            self.send_json({"inventory": inventory(), "quota": quota_snapshot(), "tokens": token_snapshot(), "official_usage": app.get("official_usage") or {"status": "not_checked"}, "usage_config": safe_usage_config(app.get("usage_config")), "usage_probe": app.get("usage_probe") or {"status": "not_checked"}, "settings": app.get("settings") or default_app_state()["settings"], "threads": get_thread_rows(), "schedules": app.get("schedules", []), "events": list(reversed(app.get("events", [])[-30:]))})
+            self.send_json({"inventory": inventory(), "quota": quota_snapshot(), "tokens": token_snapshot(), "official_usage": app.get("official_usage") or {"status": "not_checked"}, "usage_config": safe_usage_config(app.get("usage_config")), "usage_probe": app.get("usage_probe") or {"status": "not_checked"}, "settings": app.get("settings") or default_app_state()["settings"], "threads": get_thread_rows(), "projects": get_project_rows(), "schedules": app.get("schedules", []), "events": list(reversed(app.get("events", [])[-30:]))})
             return
         if parsed.path == "/api/threads":
             self.send_json({"threads": get_thread_rows()})
+            return
+        if parsed.path == "/api/projects":
+            self.send_json({"projects": get_project_rows()})
             return
         if parsed.path == "/api/inventory":
             self.send_json(inventory())
@@ -802,7 +916,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path.startswith("/static/"):
             name = parsed.path.removeprefix("/static/")
-            allowed = {"app.js": "application/javascript; charset=utf-8", "styles.css": "text/css; charset=utf-8"}
+            allowed = {"app.js": "application/javascript; charset=utf-8", "styles.css": "text/css; charset=utf-8", "overrides.css": "text/css; charset=utf-8"}
             if name in allowed:
                 self.serve_file(APP_DIR / "static" / name, allowed[name])
                 return
@@ -860,6 +974,20 @@ class Handler(BaseHTTPRequestHandler):
             app.setdefault("events", []).append({"at": iso(now_ms()), "kind": "manual_enqueue", "message": "手动加入队列", "detail": detail, "ok": ok})
             app["events"] = app["events"][-100:]; write_app_state(app)
             self.send_json({"ok": ok, "detail": detail}, 200 if ok else 502); return
+        if parsed.path == "/api/goals/resume":
+            thread_id = str(data.get("thread_id") or "").strip()
+            message = str(data.get("message") or "继续之前的任务；先检查当前状态，再从上次停下的位置继续。").strip()
+            row = next((item for item in get_thread_rows() if item.get("id") == thread_id), None)
+            if row is None:
+                self.send_json({"error": "未找到这个线程，可能已不在最近线程列表中"}, HTTPStatus.NOT_FOUND); return
+            was_archived = bool(row.get("archived"))
+            ok, detail = restore_goal(thread_id, message)
+            app.setdefault("events", []).append({
+                "at": iso(now_ms()), "kind": "goal_resume", "message": "恢复目标并加入队列" if ok else "恢复目标失败",
+                "detail": detail, "ok": ok, "thread_id": thread_id, "unarchived": was_archived,
+            })
+            app["events"] = app["events"][-100:]; write_app_state(app)
+            self.send_json({"ok": ok, "detail": detail, "unarchived": was_archived}, 200 if ok else 502); return
         if parsed.path == "/api/usage-config":
             base_url = str(data.get("base_url") or "").strip()
             path = str(data.get("path") or "/v1/usage").strip()

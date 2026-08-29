@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +42,8 @@ def main() -> int:
         str(SPEC),
         "--add-data",
         f"{ROOT / 'static'}{separator}static",
+        "--collect-data",
+        "certifi",
         str(ROOT / "app.py"),
     ]
     subprocess.run(command, cwd=ROOT, check=True)
