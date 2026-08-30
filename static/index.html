@@ -31,10 +31,10 @@
           <article class="hero-card"><div class="hero-copy"><span class="live-label"><i></i>后台监测中</span><h2 id="hero-title">正在读取本机状态…</h2><p id="hero-copy">扫描项目、会话和额度来源。</p><div class="button-row"><button class="primary-button" data-go-tab="projects">查看项目</button><button class="secondary-button" id="hero-check-quota">刷新用量</button></div></div><div class="usage-ring" id="usage-ring"><div><strong id="ring-value">—</strong><span>5 小时已用</span></div></div></article>
           <div class="metric-grid" id="metrics"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
           <div class="dashboard-grid">
-            <article class="surface-card"><header class="card-header"><div><h3>最近项目</h3><p>按工作目录自动归类</p></div><button class="link-button" data-go-tab="projects">查看全部</button></header><div id="recent-projects" class="compact-list"><div class="empty">加载中…</div></div></article>
+            <article class="surface-card"><header class="card-header"><div><h3>最近项目</h3></div><button class="link-button" data-go-tab="projects">查看全部</button></header><div id="recent-projects" class="compact-list"><div class="empty">加载中…</div></div></article>
             <article class="surface-card"><header class="card-header"><div><h3>用量窗口</h3><p id="overview-source-detail">正在检测 Codex CLI</p></div><span id="overview-quota-pill" class="badge neutral">检测中</span></header><div id="overview-quota-bars" class="quota-bars"></div><div class="provider-summary" id="overview-provider-summary"><div class="provider-summary-head"><strong>第三方提供商</strong><span id="overview-provider-pill" class="badge neutral">未配置</span></div><p id="overview-provider-detail">可在用量页配置兼容的余额接口。</p></div><button class="secondary-button full" data-go-tab="quota">查看用量详情</button></article>
           </div>
-          <article class="surface-card"><header class="card-header"><div><h3>正在进行</h3><p>运行中或等待额度的会话</p></div></header><div id="active-tasks" class="compact-list"><div class="empty">加载中…</div></div></article>
+          <article class="surface-card"><header class="card-header"><div><h3>正在进行</h3></div></header><div id="active-tasks" class="compact-list"><div class="empty">加载中…</div></div></article>
         </section>
 
         <section class="tab-panel full-height-panel" data-panel="projects">
@@ -51,11 +51,11 @@
         </section>
 
         <section class="tab-panel" data-panel="quota">
-          <div class="section-toolbar"><span></span><button class="primary-button" id="cli-status-check">通过 CLI 刷新</button></div>
+          <div class="section-toolbar"><span></span><button class="primary-button" id="cli-status-check">刷新官方额度</button></div>
           <article class="surface-card cli-card"><div class="cli-icon">›_</div><div class="cli-main"><div class="card-title-line"><h3>Codex CLI</h3><span id="cli-pill" class="badge neutral">检测中</span></div><p id="cli-summary">正在查找当前平台的 Codex CLI…</p><code id="cli-path">—</code></div><button class="secondary-button" data-go-tab="settings">更改路径</button></article>
           <div id="quota-windows" class="window-grid"><div class="empty">刷新后显示额度窗口</div></div>
           <div class="source-grid">
-            <article class="surface-card"><header class="card-header"><div><h3>官方订阅</h3><p id="official-auth-summary">检测本机 OAuth</p></div><span id="probe-pill" class="badge neutral">未检查</span></header><div id="official-result" class="result-box hidden"></div><button class="secondary-button" id="official-check">使用自动回退检查</button></article>
+            <article class="surface-card"><header class="card-header"><div><h3>官方订阅</h3><p id="official-auth-summary">检测本机 OAuth</p></div><span id="probe-pill" class="badge neutral">未检查</span></header><div id="official-result" class="result-box hidden"></div><button class="secondary-button" id="official-check">检查额度</button></article>
             <article class="surface-card"><header class="card-header"><div><h3>第三方提供商</h3><p>读取兼容的余额接口</p></div><span id="usage-pill" class="badge neutral">未配置</span></header><form id="usage-form" class="form-stack"><div class="form-grid"><label>Base URL<input name="base_url" placeholder="https://example.com" /></label><label>路径<input name="path" value="/v1/usage" /></label><label>API Key<input name="api_key" type="password" placeholder="仅保存在本机" /></label><label>轮询分钟<input name="poll_minutes" type="number" min="1" value="5" /></label></div><input name="unit" type="hidden" value="USD" /><div class="button-row"><button class="primary-button" type="submit">保存</button><button class="secondary-button" type="button" id="usage-check">测试连接</button></div></form><div id="usage-result" class="result-box hidden"></div></article>
           </div>
         </section>

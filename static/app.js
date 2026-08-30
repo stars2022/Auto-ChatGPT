@@ -439,7 +439,7 @@ $('#schedule-form').onsubmit = async (event) => {
   catch (error) { toast(error.message); }
 };
 
-$('#cli-status-check').onclick = async () => { const button = $('#cli-status-check'); button.disabled = true; button.textContent = '读取中…'; try { const result = await api('/api/cli-status-check', { method:'POST', body:'{}' }); overview.official_usage = result.probe; renderHero(); renderQuota(); toast('CLI 用量状态已更新'); } catch (error) { toast(`CLI 状态失败：${error.message}`); } finally { button.disabled = false; button.textContent = '通过 CLI 刷新'; } };
+$('#cli-status-check').onclick = async () => { const button = $('#cli-status-check'); button.disabled = true; button.textContent = '读取中…'; try { const result = await api('/api/cli-status-check', { method:'POST', body:'{}' }); overview.official_usage = result.probe; renderHero(); renderQuota(); toast(result.probe.credential_source === 'codex_cli' ? '已通过 CLI 更新官方额度' : 'CLI 不可用，已回退 OAuth 检查'); } catch (error) { toast(`官方额度检查失败：${error.message}`); } finally { button.disabled = false; button.textContent = '刷新官方额度'; } };
 $('#official-check').onclick = async () => { try { const result = await api('/api/official-usage-check', { method:'POST', body:'{}' }); overview.official_usage = result.probe; renderHero(); renderQuota(); toast(result.probe.credential_source === 'codex_cli' ? '已通过 Codex CLI 更新' : '已通过 OAuth 回退更新'); } catch (error) { toast(error.message); } };
 
 $('#choose-cli-directory').onclick = async () => { if (!window.autoCodex?.pickCodexDirectory) return toast('浏览器模式下请直接粘贴 CLI 路径'); const path = await window.autoCodex.pickCodexDirectory(); if (path) { $('#codex-cli-path').value = path; await detectCli(); } };

@@ -779,7 +779,7 @@ def usage_probe(app: dict[str, Any], force: bool = False) -> dict[str, Any]:
             numeric = float(remaining) if remaining is not None else None
         except (TypeError, ValueError):
             pass
-        result = {"status": "ok", "is_active": bool(is_active), "remaining": remaining, "remaining_numeric": numeric, "unit": unit, "checked_at": checked, "http_status": 200}
+        result = {"status": "ok", "is_active": bool(is_active), "remaining": remaining, "remaining_numeric": numeric, "unit": unit, "checked_at": checked, "http_status": 200, "transport": "direct_http"}
         if previous.get("status") == "ok":
             result["last_good"] = {k: previous.get(k) for k in ("remaining", "remaining_numeric", "unit", "is_active", "checked_at")}
         elif previous.get("last_good"):
@@ -788,7 +788,7 @@ def usage_probe(app: dict[str, Any], force: bool = False) -> dict[str, Any]:
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError, UnicodeDecodeError) as exc:
         detail = getattr(exc, "reason", None) or str(exc)
         last_good = previous.get("last_good") or ({k: previous.get(k) for k in ("remaining", "remaining_numeric", "unit", "is_active", "checked_at")} if previous.get("status") == "ok" else None)
-        return {"status": "error", "detail": str(detail)[:240], "checked_at": checked, "last_good": last_good}
+        return {"status": "error", "detail": str(detail)[:240], "checked_at": checked, "last_good": last_good, "transport": "direct_http"}
 
 
 def notification(title: str, message: str) -> None:
@@ -1266,10 +1266,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"cli": info}, 200 if info.get("found") else 404)
             return
         if parsed.path == "/api/cli-status-check":
-            result = codex_cli_status_probe()
+            # Manual refresh uses the same fallback chain as the scheduler:
+            # CLI app-server first, then the local OAuth usage endpoint. This
+            # avoids showing a CLI-only failure when the OAuth path is usable.
+            result = current_official_usage_probe()
             if result.get("status") == "ok":
                 app["official_usage"] = result
-            app.setdefault("events", []).append({"at": iso(now_ms()), "kind": "cli_status_check", "message": "读取 Codex CLI /status", "ok": result.get("status") == "ok", "status": result.get("status")})
+            app.setdefault("events", []).append({"at": iso(now_ms()), "kind": "official_usage_check", "message": "检查官方额度（CLI 失败时回退 OAuth）", "ok": result.get("status") == "ok", "status": result.get("status"), "source": result.get("credential_source")})
             app["events"] = app["events"][-100:]
             write_app_state(app)
             self.send_json({"probe": result}, 200 if result.get("status") == "ok" else 502)

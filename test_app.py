@@ -122,6 +122,15 @@ class AppLogicTests(unittest.TestCase):
             result = app.official_usage_probe()
         self.assertEqual(result["status"], "oauth_not_configured")
 
+    def test_official_manual_check_falls_back_to_oauth(self):
+        cli_error = {"status": "cli_error", "detail": "app-server unavailable"}
+        oauth_ok = {"status": "ok", "credential_source": "auth.json", "windows": []}
+        with patch.object(app, "codex_cli_status_probe", return_value=cli_error), patch.object(app, "official_usage_probe", return_value=oauth_ok):
+            result = app.current_official_usage_probe()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["credential_source"], "auth.json")
+        self.assertEqual(result["cli_fallback"]["status"], "cli_error")
+
     def test_official_oauth_projection_maps_windows_without_leaking_ids(self):
         class Response:
             status = 200

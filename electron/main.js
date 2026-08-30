@@ -200,13 +200,30 @@ function trayMenu(snapshot) {
   const retrying = schedules.filter((item) => item.retry_pending).length;
   const threads = Array.isArray(snapshot.threads) ? snapshot.threads : [];
   const limited = threads.filter((item) => item.goal_status === 'usage_limited').length;
+  const official = snapshot.official_usage || {};
+  const provider = snapshot.usage_probe || {};
+  const formatBalance = (value) => {
+    if (value === null || value === undefined || value === '') return '—';
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric.toFixed(Math.abs(numeric) >= 100 ? 0 : 2) : String(value);
+  };
+  const officialWindows = Array.isArray(official.windows) ? official.windows : [];
+  const quotaParts = [];
+  if (official.status === 'ok' && officialWindows.length) {
+    quotaParts.push(`配额：${officialWindows.map((window) => `${String(window.name || '').replace('_', ' ')} ${Math.round(Number(window.used_percent || 0))}%`).join(' · ')}`);
+  }
+  if (provider.status === 'ok') {
+    quotaParts.push(`余额：${formatBalance(provider.remaining)} ${provider.unit || ''}`.trim());
+  }
+  const quotaLine = quotaParts.join(' · ') || '配额/余额：未检查';
   const status = schedules.length
     ? `自动任务：启用 ${enabled} · 等待额度 ${waiting} · 等待重试 ${retrying}`
     : '自动任务：尚未配置';
   if (tray) {
-    tray.setToolTip(`Auto Codex Companion\n${status}${limited ? `\n额度受限会话：${limited}` : ''}`);
+    tray.setToolTip(`Auto Codex Companion\n${quotaLine}\n${status}${limited ? `\n额度受限会话：${limited}` : ''}`);
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Auto Codex Companion', enabled: false },
+      { label: quotaLine, enabled: false },
       { label: status, enabled: false },
       ...(limited ? [{ label: `额度受限会话：${limited}`, enabled: false }] : []),
       { label: closeBehavior === 'tray' ? '关闭窗口：保留在后台' : '关闭窗口：退出应用', enabled: false },
