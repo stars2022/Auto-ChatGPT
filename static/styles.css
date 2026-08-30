@@ -272,9 +272,11 @@ input:focus, select:focus, textarea:focus { --field-border-color:rgba(10,132,255
 input.field-pressed, select.field-pressed, textarea.field-pressed {
   /* Hover is edge-only; the inner light is reserved for the short pressed
      state and kept compact so it reads as feedback rather than a spotlight. */
-  --field-press-color:rgba(96,177,255,.14);
+  --field-press-color:rgba(96,177,255,.09);
   background:
-    radial-gradient(110px circle at var(--press-x, 50%) var(--press-y, 50%), var(--field-press-color), transparent 72%) padding-box,
+    radial-gradient(92px circle at var(--press-x, 50%) var(--press-y, 50%), var(--field-press-color), transparent 68%) padding-box,
+    linear-gradient(var(--field), var(--field)) padding-box,
+    radial-gradient(58px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), var(--edge-highlight, transparent), transparent 76%) border-box,
     linear-gradient(var(--field-border-color), var(--field-border-color)) border-box;
 }
 textarea { resize: vertical; line-height: 1.45; }
