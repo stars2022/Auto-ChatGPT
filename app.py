@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import queue
 import re
 import shutil
 import sqlite3
@@ -234,17 +235,70 @@ def effective_usage_config(config: dict[str, Any] | None) -> dict[str, Any]:
     return config
 
 
-def codex_command() -> str | None:
-    configured = os.environ.get("CODEX_CLI_PATH")
-    candidates = [configured, shutil.which("codex"), "/Applications/ChatGPT.app/Contents/Resources/codex"]
-    for candidate in candidates:
-        if candidate and Path(candidate).exists() and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+def _saved_codex_cli_path() -> str:
+    state = read_json(STATE_FILE, {})
+    if isinstance(state, dict) and isinstance(state.get("settings"), dict):
+        return str(state["settings"].get("codex_cli_path") or "").strip()
+    return ""
 
 
-def codex_version() -> str | None:
-    command = codex_command()
+def _expand_cli_candidate(value: str | None) -> list[Path]:
+    if not value:
+        return []
+    candidate = Path(value).expanduser()
+    if candidate.is_dir():
+        names = ["codex.exe", "codex.cmd", "codex.bat", "codex"] if os.name == "nt" else ["codex"]
+        return [candidate / name for name in names]
+    return [candidate]
+
+
+def codex_command_info(configured_path: str | None = None) -> dict[str, Any]:
+    """Resolve Codex CLI with platform defaults and an optional file or directory."""
+    manual = configured_path if configured_path is not None else (os.environ.get("CODEX_CLI_PATH") or _saved_codex_cli_path())
+    candidates: list[tuple[str, Path]] = []
+    candidates.extend(("manual", item) for item in _expand_cli_candidate(manual))
+    discovered = shutil.which("codex")
+    if discovered:
+        candidates.append(("path", Path(discovered)))
+    if sys.platform == "darwin":
+        candidates.extend([
+            ("chatgpt_bundle", Path("/Applications/ChatGPT.app/Contents/Resources/codex")),
+            ("user_app_bundle", Path.home() / "Applications/ChatGPT.app/Contents/Resources/codex"),
+            ("homebrew", Path("/opt/homebrew/bin/codex")),
+            ("homebrew", Path("/usr/local/bin/codex")),
+        ])
+    elif os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        roaming = Path(os.environ.get("APPDATA", ""))
+        candidates.extend([
+            ("npm", roaming / "npm/codex.cmd"),
+            ("chatgpt_bundle", local / "Programs/ChatGPT/resources/codex.exe"),
+            ("program_files", Path(os.environ.get("PROGRAMFILES", "")) / "ChatGPT/resources/codex.exe"),
+        ])
+    else:
+        candidates.extend([
+            ("local", Path.home() / ".local/bin/codex"),
+            ("system", Path("/usr/local/bin/codex")),
+            ("system", Path("/usr/bin/codex")),
+        ])
+    seen: set[str] = set()
+    for source, candidate in candidates:
+        text = str(candidate)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        executable = candidate.exists() and (os.name == "nt" or os.access(candidate, os.X_OK))
+        if executable:
+            return {"found": True, "path": text, "source": source, "platform": sys.platform}
+    return {"found": False, "path": None, "source": "not_found", "platform": sys.platform, "manual_path": manual or ""}
+
+
+def codex_command(configured_path: str | None = None) -> str | None:
+    return codex_command_info(configured_path).get("path")
+
+
+def codex_version(configured_path: str | None = None) -> str | None:
+    command = codex_command(configured_path)
     if not command:
         return None
     try:
@@ -253,6 +307,107 @@ def codex_version() -> str | None:
         return value or None
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def _wait_json_response(lines: queue.Queue[dict[str, Any]], request_id: int, timeout: float) -> dict[str, Any] | None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            message = lines.get(timeout=max(0.05, deadline - time.monotonic()))
+        except queue.Empty:
+            return None
+        if message.get("id") == request_id:
+            return message
+    return None
+
+
+def codex_cli_status_probe(configured_path: str | None = None) -> dict[str, Any]:
+    """Read the machine-readable rate-limit snapshot behind CLI `/status`.
+
+    `/status` itself is a TUI slash command. The app-server request is the CLI's
+    stable machine-readable equivalent and works without scraping terminal ANSI.
+    """
+    checked = iso(now_ms())
+    info = codex_command_info(configured_path)
+    command = info.get("path")
+    if not command:
+        return {"status": "cli_not_found", "checked_at": checked, "cli": info}
+    process: subprocess.Popen[str] | None = None
+    lines: queue.Queue[dict[str, Any]] = queue.Queue()
+    try:
+        process = subprocess.Popen(
+            [str(command), "app-server", "--listen", "stdio://"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+
+        def read_stdout() -> None:
+            assert process is not None and process.stdout is not None
+            for line in process.stdout:
+                try:
+                    value = json.loads(line)
+                    if isinstance(value, dict):
+                        lines.put(value)
+                except ValueError:
+                    continue
+
+        threading.Thread(target=read_stdout, name="codex-status-reader", daemon=True).start()
+        assert process.stdin is not None
+
+        def send(message: dict[str, Any]) -> None:
+            assert process is not None and process.stdin is not None
+            process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
+            process.stdin.flush()
+
+        send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "auto-codex-companion", "title": "Auto Codex Companion", "version": "0.2.0"}, "capabilities": {}}})
+        initialized = _wait_json_response(lines, 1, 6)
+        if not initialized or initialized.get("error"):
+            raise RuntimeError(str((initialized or {}).get("error") or "Codex app-server 初始化超时"))
+        send({"method": "initialized", "params": {}})
+        send({"id": 2, "method": "account/rateLimits/read", "params": {}})
+        response = _wait_json_response(lines, 2, 8)
+        if not response:
+            raise RuntimeError("Codex CLI 未返回额度状态")
+        if response.get("error"):
+            raise RuntimeError(str(response["error"]))
+        result = response.get("result") if isinstance(response.get("result"), dict) else {}
+        rate_limits = result.get("rateLimits") if isinstance(result.get("rateLimits"), dict) else {}
+        windows = []
+        for key in ("primary", "secondary"):
+            window = rate_limits.get(key)
+            if not isinstance(window, dict) or window.get("usedPercent") is None:
+                continue
+            minutes = window.get("windowDurationMins")
+            if minutes == 300:
+                name = "5_hour"
+            elif minutes == 10_080:
+                name = "7_day"
+            elif isinstance(minutes, (int, float)) and minutes >= 1_440:
+                name = f"{int(minutes // 1_440)}_day"
+            else:
+                name = f"{int((minutes or 0) // 60)}_hour"
+            reset = window.get("resetsAt")
+            windows.append({"name": name, "used_percent": window.get("usedPercent"), "reset_at": iso(float(reset) * 1000) if isinstance(reset, (int, float)) else reset})
+        return {
+            "status": "ok", "auth_kind": "cli", "credential_source": "codex_cli",
+            "endpoint": "account/rateLimits/read", "checked_at": checked, "windows": windows,
+            "plan_type": rate_limits.get("planType"), "credits": _safe_response_shape(rate_limits.get("credits") or {}),
+            "reset_credits": _safe_response_shape(result.get("rateLimitResetCredits") or {}),
+            "cli": {**info, "version": codex_version(configured_path)},
+        }
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as exc:
+        return {"status": "cli_error", "checked_at": checked, "detail": str(exc)[:400], "cli": info}
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
 
 def _keychain_auth() -> dict[str, Any] | None:
@@ -385,6 +540,22 @@ def official_usage_probe() -> dict[str, Any]:
         return {"status": "http_error", "auth_kind": "oauth", "credential_source": source, "endpoint": url, "http_status": exc.code, "checked_at": checked, "detail": detail}
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, UnicodeDecodeError) as exc:
         return {"status": "error", "auth_kind": "oauth", "credential_source": source, "endpoint": url, "checked_at": checked, "detail": str(getattr(exc, "reason", None) or exc)[:400]}
+
+
+def current_official_usage_probe(configured_path: str | None = None) -> dict[str, Any]:
+    """Prefer the Codex CLI status callback, then fall back to local OAuth."""
+    cli_result = codex_cli_status_probe(configured_path)
+    if cli_result.get("status") == "ok":
+        return cli_result
+    oauth_result = official_usage_probe()
+    oauth_result["cli_fallback"] = {
+        "status": cli_result.get("status"),
+        "detail": cli_result.get("detail"),
+        "cli": cli_result.get("cli"),
+    }
+    return oauth_result
+
+
 def read_app_state() -> dict[str, Any]:
     value = read_json(STATE_FILE, {})
     if not isinstance(value, dict):
@@ -393,6 +564,9 @@ def read_app_state() -> dict[str, Any]:
     for key, default in defaults.items():
         if key not in value:
             value[key] = default
+        elif isinstance(default, dict) and isinstance(value.get(key), dict):
+            for nested_key, nested_default in default.items():
+                value[key].setdefault(nested_key, nested_default)
     return value
 
 
@@ -409,6 +583,7 @@ def default_app_state() -> dict[str, Any]:
         "settings": {
             "poll_seconds": POLL_SECONDS,
             "official_poll_minutes": 5,
+            "codex_cli_path": "",
             "notifications": True,
             # 0 means retry forever (with exponential backoff).
             "default_network_retries": 0,
@@ -488,16 +663,19 @@ def inventory() -> dict[str, Any]:
         file_info(Path.home() / "Library/Preferences/com.openai.chat.plist", "ChatGPT 偏好"),
     ]
     config = parse_config_summary(CODEX_HOME / "config.toml")
+    cli = codex_command_info()
+    cli["version"] = codex_version()
     return {
         "codex_home": str(CODEX_HOME),
         "files": files,
         "config": config,
-        "codex_cli": codex_command(),
-        "codex_version": codex_version(),
+        "codex_cli": cli.get("path"),
+        "codex_version": cli.get("version"),
+        "codex_cli_info": cli,
         "auth": local_auth_info(),
         "chatgpt_app_running": any("ChatGPT.app/Contents/MacOS/ChatGPT" in line for line in _process_lines()),
         "limitations": [
-            "本地没有发现可直接读取的配额数值接口。配额监测依据 thread_goals.status 的变化。",
+            "优先通过 Codex CLI app-server 的 account/rateLimits/read 读取 `/status` 对应额度；失败时回退到本机 OAuth 探针。",
             "auth.json 只报告存在性和文件元数据，不读取或展示内容。",
             "继续任务通过 codex queue 写入线程队列；不会模拟点击或修改 ChatGPT 数据库。",
             "官方额度探针仅在 auth_mode=chatgpt 的 OAuth 下请求 ChatGPT wham/usage；API key 模式不会冒充官方订阅。",
@@ -720,21 +898,23 @@ def parse_when(value: str) -> int | None:
 def schedule_due(schedule: dict[str, Any], current_ms: int, recovered_threads: set[str]) -> bool:
     if not schedule.get("enabled", True):
         return False
+    recovery_targets = {str(schedule.get("thread_id") or ""), "__official__", "__usage_probe__"}
+    matching_recovery = bool(recovered_threads & recovery_targets)
     next_attempt = int(schedule.get("next_attempt_at") or 0)
-    if next_attempt and current_ms < next_attempt:
-        return False
-    if schedule.get("waiting_for_quota") and not (recovered_threads & {str(schedule.get("thread_id") or ""), "__official__", "__usage_probe__"}):
-        return False
+    if schedule.get("waiting_for_quota"):
+        return matching_recovery
+    if schedule.get("retry_pending"):
+        return bool(next_attempt and current_ms >= next_attempt)
     kind = schedule.get("kind")
     if kind == "quota_recovered":
-        return bool(schedule.get("thread_id") in recovered_threads or "__official__" in recovered_threads or "__usage_probe__" in recovered_threads or (schedule.get("retry_pending") and next_attempt and current_ms >= next_attempt))
+        return matching_recovery
     if kind == "interval":
         interval = max(1, int(schedule.get("interval_minutes", 60))) * 60_000
-        last = int(schedule.get("last_run_at") or 0)
-        return bool(schedule.get("retry_pending")) or current_ms - last >= interval
+        baseline = int(schedule.get("last_run_at") or schedule.get("created_at") or current_ms)
+        return current_ms - baseline >= interval
     if kind == "at_time":
         at = parse_when(str(schedule.get("run_at") or ""))
-        return bool(schedule.get("retry_pending")) or (at is not None and current_ms >= at and not schedule.get("last_run_at"))
+        return bool(at is not None and current_ms >= at and not schedule.get("last_run_at"))
     return False
 
 
@@ -788,7 +968,7 @@ class Scheduler:
             official_checked = parse_when(str(old_official.get("checked_at") or "")) if old_official.get("checked_at") else None
             official_poll_ms = max(1, int(settings.get("official_poll_minutes") or 5)) * 60_000
             if official_checked is None or current_ms - official_checked >= official_poll_ms:
-                new_official = official_usage_probe()
+                new_official = current_official_usage_probe()
                 if new_official.get("status") != "ok" and old_official.get("status") == "ok":
                     new_official["last_good"] = old_official
                 app["official_usage"] = new_official
@@ -822,16 +1002,20 @@ class Scheduler:
                 ok, detail = enqueue(str(schedule.get("thread_id") or ""), str(schedule.get("message") or "继续之前的任务"))
                 attempt_at = now_ms()
                 schedule["last_attempt_at"] = attempt_at
-                schedule["last_run_at"] = attempt_at
                 schedule["last_result"] = {"ok": ok, "detail": detail, "at": iso(attempt_at)}
-                schedule["run_count"] = int(schedule.get("run_count") or 0) + 1
+                schedule["attempt_count"] = int(schedule.get("attempt_count") or 0) + 1
                 schedule["retry_pending"] = False
                 schedule["next_attempt_at"] = None
                 schedule["blocked_reason"] = None
                 error_kind = None if ok else classify_enqueue_error(detail)
                 if ok:
+                    schedule["last_run_at"] = attempt_at
+                    schedule["run_count"] = int(schedule.get("run_count") or 0) + 1
                     schedule["consecutive_failures"] = 0
                     schedule["waiting_for_quota"] = False
+                    if schedule.get("kind") == "at_time":
+                        schedule["enabled"] = False
+                        schedule["completed_at"] = attempt_at
                 elif error_kind == "quota" and schedule.get("retry_on_quota", True):
                     schedule["waiting_for_quota"] = True
                     schedule["consecutive_failures"] = int(schedule.get("consecutive_failures") or 0) + 1
@@ -854,10 +1038,15 @@ class Scheduler:
                         delay_ms = min(backoff * (2 ** min(failures - 1, 12)) * 1000, 6 * 60 * 60 * 1000)
                         schedule["next_attempt_at"] = attempt_at + delay_ms
                         schedule["retry_pending"] = True
+                        schedule["blocked_reason"] = f"网络失败，等待第 {failures} 次重试"
+                    else:
+                        schedule["enabled"] = False
+                        schedule["blocked_reason"] = f"网络重试已用尽：{detail}"
                     schedule["consecutive_failures"] = failures
                 else:
                     schedule["consecutive_failures"] = int(schedule.get("consecutive_failures") or 0) + 1
                     schedule["blocked_reason"] = f"{error_kind or 'unknown'}：{detail}"
+                    schedule["enabled"] = False
                 app.setdefault("events", []).append({
                     "at": iso(attempt_at), "kind": "schedule_run", "schedule_id": schedule.get("id"),
                     "message": f"{schedule.get('name', '未命名')}：{'已加入队列' if ok else f'执行失败（{error_kind}）'}", "detail": detail,
@@ -943,28 +1132,67 @@ class Handler(BaseHTTPRequestHandler):
             return
         app = read_app_state() or default_app_state()
         if parsed.path == "/api/schedules":
-            kind = data.get("kind")
+            kind = str(data.get("kind") or "")
             if kind not in {"interval", "at_time", "quota_recovered"}:
                 self.send_json({"error": "kind 必须是 interval、at_time 或 quota_recovered"}, HTTPStatus.BAD_REQUEST); return
-            if not data.get("thread_id") or not data.get("message"):
+            thread_id = str(data.get("thread_id") or "").strip()
+            message = str(data.get("message") or "").strip()
+            if not thread_id or not message:
                 self.send_json({"error": "thread_id 和 message 不能为空"}, HTTPStatus.BAD_REQUEST); return
+            if not any(str(row.get("id") or "") == thread_id for row in get_thread_rows()):
+                self.send_json({"error": "目标会话不存在或已不在最近会话列表"}, HTTPStatus.BAD_REQUEST); return
+            try:
+                interval_minutes = max(1, int(data.get("interval_minutes") or 60)) if kind == "interval" else None
+                max_attempts = max(0, int(data.get("max_attempts") or 0))
+                backoff_seconds = max(1, int(data.get("backoff_seconds") or 30))
+            except (TypeError, ValueError):
+                self.send_json({"error": "间隔、重试次数和退避时间必须是有效整数"}, HTTPStatus.BAD_REQUEST); return
+            run_at = str(data.get("run_at") or "").strip() if kind == "at_time" else None
+            if kind == "at_time":
+                run_at_ms = parse_when(run_at)
+                if run_at_ms is None:
+                    self.send_json({"error": "指定时间格式无效"}, HTTPStatus.BAD_REQUEST); return
+                if run_at_ms < now_ms():
+                    self.send_json({"error": "指定时间必须晚于当前时间"}, HTTPStatus.BAD_REQUEST); return
+            try:
+                token_budget = int(data["token_budget"]) if str(data.get("token_budget") or "").strip() else None
+                price_budget = float(data["price_budget_usd"]) if str(data.get("price_budget_usd") or "").strip() else None
+                price_per_1k = float(data["price_per_1k_tokens"]) if str(data.get("price_per_1k_tokens") or "").strip() else None
+            except (TypeError, ValueError):
+                self.send_json({"error": "预算必须是有效数字"}, HTTPStatus.BAD_REQUEST); return
+            if token_budget is not None and token_budget <= 0:
+                self.send_json({"error": "Token 预算必须大于 0"}, HTTPStatus.BAD_REQUEST); return
+            if (price_budget is None) != (price_per_1k is None):
+                self.send_json({"error": "价格预算和每 1K tokens 单价必须同时填写"}, HTTPStatus.BAD_REQUEST); return
+            if price_budget is not None and (price_budget <= 0 or price_per_1k is None or price_per_1k <= 0):
+                self.send_json({"error": "价格预算和单价必须大于 0"}, HTTPStatus.BAD_REQUEST); return
             item = {
                 "id": str(uuid.uuid4()), "name": str(data.get("name") or "未命名计划"), "kind": kind,
-                "thread_id": str(data["thread_id"]), "message": str(data["message"]), "enabled": bool(data.get("enabled", True)),
-                "interval_minutes": max(1, int(data.get("interval_minutes") or 60)), "run_at": data.get("run_at"),
-                "token_budget": int(data["token_budget"]) if str(data.get("token_budget") or "").strip().isdigit() else None,
-                "price_budget_usd": float(data["price_budget_usd"]) if str(data.get("price_budget_usd") or "").strip() else None,
-                "price_per_1k_tokens": float(data["price_per_1k_tokens"]) if str(data.get("price_per_1k_tokens") or "").strip() else None,
+                "thread_id": thread_id, "message": message, "enabled": bool(data.get("enabled", True)),
+                "interval_minutes": interval_minutes, "run_at": run_at,
+                "token_budget": token_budget, "price_budget_usd": price_budget, "price_per_1k_tokens": price_per_1k,
                 "retry_on_network": bool(data.get("retry_on_network", True)), "retry_on_quota": bool(data.get("retry_on_quota", True)),
-                "max_attempts": max(0, int(data.get("max_attempts") or 0)), "backoff_seconds": max(1, int(data.get("backoff_seconds") or 30)),
+                "max_attempts": max_attempts, "backoff_seconds": backoff_seconds,
                 "created_at": now_ms(), "last_run_at": None, "last_attempt_at": None, "run_count": 0, "last_result": None,
-                "consecutive_failures": 0, "waiting_for_quota": False, "retry_pending": False, "next_attempt_at": None, "blocked_reason": None,
+                "attempt_count": 0, "consecutive_failures": 0, "waiting_for_quota": False, "retry_pending": False,
+                "next_attempt_at": None, "blocked_reason": None, "completed_at": None,
             }
             app.setdefault("schedules", []).append(item); write_app_state(app); self.send_json(item, HTTPStatus.CREATED); return
         if parsed.path == "/api/schedules/toggle":
             item = next((x for x in app.get("schedules", []) if x.get("id") == data.get("id")), None)
             if item is None: self.send_json({"error": "计划不存在"}, HTTPStatus.NOT_FOUND); return
-            item["enabled"] = bool(data.get("enabled")); write_app_state(app); self.send_json(item); return
+            enabled = bool(data.get("enabled"))
+            item["enabled"] = enabled
+            item["waiting_for_quota"] = False
+            item["retry_pending"] = False
+            item["next_attempt_at"] = None
+            item["consecutive_failures"] = 0
+            if enabled:
+                item["blocked_reason"] = None
+                if item.get("completed_at"):
+                    item["completed_at"] = None
+                    item["last_run_at"] = None
+            write_app_state(app); self.send_json(item); return
         if parsed.path == "/api/schedules/delete":
             old = len(app.get("schedules", [])); app["schedules"] = [x for x in app.get("schedules", []) if x.get("id") != data.get("id")]
             if len(app["schedules"]) == old: self.send_json({"error": "计划不存在"}, HTTPStatus.NOT_FOUND); return
@@ -1011,19 +1239,46 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"probe": result})
             return
         if parsed.path == "/api/official-usage-check":
-            result = official_usage_probe()
+            result = current_official_usage_probe()
             app["official_usage"] = result
-            app.setdefault("events", []).append({"at": iso(now_ms()), "kind": "official_usage_check", "message": "检查官方额度接口", "ok": result.get("status") == "ok", "status": result.get("status"), "http_status": result.get("http_status")})
+            app.setdefault("events", []).append({"at": iso(now_ms()), "kind": "official_usage_check", "message": "通过 Codex CLI 检查额度", "ok": result.get("status") == "ok", "status": result.get("status"), "source": result.get("credential_source"), "http_status": result.get("http_status")})
             app["events"] = app["events"][-100:]
             write_app_state(app)
             self.send_json({"probe": result})
             return
+        if parsed.path == "/api/cli-detect":
+            manual_path = str(data.get("path") or "").strip()
+            info = codex_command_info(manual_path)
+            if info.get("found"):
+                command = str(info["path"])
+                try:
+                    completed = subprocess.run([command, "--version"], capture_output=True, text=True, timeout=4)
+                    info["version"] = (completed.stdout or completed.stderr).strip() or None
+                    if completed.returncode != 0:
+                        info.update({"found": False, "detail": "目标文件无法作为 Codex CLI 运行"})
+                except (OSError, subprocess.SubprocessError) as exc:
+                    info.update({"found": False, "detail": str(exc)[:300]})
+            self.send_json({"cli": info}, 200 if info.get("found") else 404)
+            return
+        if parsed.path == "/api/cli-status-check":
+            result = codex_cli_status_probe()
+            if result.get("status") == "ok":
+                app["official_usage"] = result
+            app.setdefault("events", []).append({"at": iso(now_ms()), "kind": "cli_status_check", "message": "读取 Codex CLI /status", "ok": result.get("status") == "ok", "status": result.get("status")})
+            app["events"] = app["events"][-100:]
+            write_app_state(app)
+            self.send_json({"probe": result}, 200 if result.get("status") == "ok" else 502)
+            return
         if parsed.path == "/api/settings":
             settings = app.get("settings") or default_app_state()["settings"]
+            requested_cli_path = str(data.get("codex_cli_path") if data.get("codex_cli_path") is not None else settings.get("codex_cli_path") or "").strip()
+            if requested_cli_path and not codex_command_info(requested_cli_path).get("found"):
+                self.send_json({"error": "指定路径中没有找到可执行的 Codex CLI；可以选择 codex 文件或其所在目录"}, HTTPStatus.BAD_REQUEST); return
             try:
                 settings.update({
                     "poll_seconds": max(5, int(data.get("poll_seconds") or settings.get("poll_seconds") or POLL_SECONDS)),
                     "official_poll_minutes": max(1, int(data.get("official_poll_minutes") or settings.get("official_poll_minutes") or 5)),
+                    "codex_cli_path": requested_cli_path,
                     "notifications": bool(data.get("notifications", settings.get("notifications", True))),
                     "default_network_retries": max(0, int(data.get("default_network_retries") if data.get("default_network_retries") not in (None, "") else settings.get("default_network_retries", 0))),
                     "default_backoff_seconds": max(1, int(data.get("default_backoff_seconds") or settings.get("default_backoff_seconds") or 30)),
@@ -1039,8 +1294,11 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     if not STATE_FILE.exists(): write_app_state(default_app_state())
-    scheduler = Scheduler(); scheduler.start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
+    # Bind the local API before the first quota probe. The initial CLI/OAuth
+    # check may take several seconds; the desktop window should still become
+    # usable immediately while the scheduler works in its daemon thread.
+    scheduler = Scheduler(); scheduler.start()
     print(f"Auto Codex Companion running at http://{HOST}:{PORT}")
     print(f"Codex home: {CODEX_HOME}")
     try:

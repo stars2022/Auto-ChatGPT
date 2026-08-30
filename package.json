@@ -1,6 +1,6 @@
 {
   "name": "auto-codex-companion",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Local background control plane for Codex queues, usage limits and resumable tasks",
   "homepage": "https://github.com/stars2022/Auto-ChatGPT",
   "author": { "name": "Auto Codex Companion", "email": "opensource@example.com" },
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "build:backend": "python scripts/build_backend.py",
+    "build:backend": "node scripts/run-python.js scripts/build_backend.py",
     "dist": "electron-builder --publish never",
     "dist:mac": "electron-builder --mac --publish never",
     "dist:win": "electron-builder --win --x64 --publish never",
@@ -31,10 +31,10 @@
       { "from": "static", "to": "backend/static" },
       { "from": "README.md", "to": "backend/README.md" }
     ],
-    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
-    "win": { "target": ["nsis"], "artifactName": "Auto-Codex-Companion-Setup-${version}-${arch}.${ext}" },
+    "mac": { "icon": "assets/icon.icns", "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
+    "win": { "icon": "assets/icon.ico", "target": ["nsis"], "artifactName": "Auto-Codex-Companion-Setup-${version}-${arch}.${ext}" },
     "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true },
-    "linux": { "target": ["AppImage", "deb"], "category": "Development", "maintainer": "opensource@example.com" },
+    "linux": { "icon": "assets/icon.png", "target": ["AppImage", "deb"], "category": "Development", "maintainer": "opensource@example.com" },
     "publish": null
   }
 }

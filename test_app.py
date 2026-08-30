@@ -1,16 +1,110 @@
 import unittest
+from copy import deepcopy
 from unittest.mock import patch
 
 import app
 
 
 class AppLogicTests(unittest.TestCase):
+    def _tick(self, state, now, goals=None, threads=None, enqueue_result=(True, "queued")):
+        """Run one scheduler tick with all external state held deterministic."""
+        written = {}
+        state = deepcopy(state)
+        state.setdefault("settings", {}).update({
+            "official_poll_minutes": 60,
+            "notifications": False,
+        })
+        state["official_usage"] = {
+            "status": "ok",
+            "checked_at": app.iso(now),
+            "windows": [],
+        }
+        state.setdefault("usage_probe", {"status": "not_configured"})
+        with patch.object(app, "now_ms", return_value=now), \
+             patch.object(app, "read_app_state", return_value=state), \
+             patch.object(app, "write_app_state", side_effect=lambda value: written.setdefault("state", deepcopy(value))), \
+             patch.object(app, "get_goal_rows", return_value=goals or []), \
+             patch.object(app, "get_thread_rows", return_value=threads or [{"id": "thread-1", "tokens_used": 0}]), \
+             patch.object(app, "usage_probe", return_value=state.get("usage_probe", {"status": "not_configured"})), \
+             patch.object(app, "enqueue", return_value=enqueue_result), \
+             patch.object(app, "notification"):
+            app.Scheduler().tick()
+        return written["state"]
+
     def test_schedule_due_for_quota_recovery(self):
         schedule = {"enabled": True, "kind": "quota_recovered", "thread_id": "thread-1"}
         self.assertTrue(app.schedule_due(schedule, app.now_ms(), {"thread-1"}))
         self.assertTrue(app.schedule_due(schedule, app.now_ms(), {"__official__"}))
         self.assertTrue(app.schedule_due(schedule, app.now_ms(), {"__usage_probe__"}))
         self.assertFalse(app.schedule_due(schedule, app.now_ms(), set()))
+
+    def test_interval_schedule_waits_for_first_interval(self):
+        now = 1_700_000_000_000
+        schedule = {
+            "id": "s1", "name": "interval", "kind": "interval", "thread_id": "thread-1",
+            "message": "继续", "enabled": True, "interval_minutes": 1,
+            "created_at": now, "run_count": 0, "attempt_count": 0,
+        }
+        state = app.default_app_state(); state["schedules"] = [schedule]
+        with patch.object(app, "enqueue") as enqueue:
+            result = self._tick(state, now, threads=[{"id": "thread-1", "tokens_used": 0}])
+        enqueue.assert_not_called()
+        self.assertEqual(result["schedules"][0]["run_count"], 0)
+
+    def test_at_time_success_completes_and_disables_schedule(self):
+        now = 1_700_000_000_000
+        schedule = {
+            "id": "s1", "name": "once", "kind": "at_time", "thread_id": "thread-1",
+            "message": "继续", "enabled": True, "run_at": app.iso(now - 1),
+            "created_at": now - 10_000, "run_count": 0, "attempt_count": 0,
+        }
+        state = app.default_app_state(); state["schedules"] = [schedule]
+        result = self._tick(state, now)
+        saved = result["schedules"][0]
+        self.assertFalse(saved["enabled"])
+        self.assertIsNotNone(saved["completed_at"])
+        self.assertEqual(saved["run_count"], 1)
+        self.assertEqual(saved["attempt_count"], 1)
+
+    def test_network_failure_retries_then_stops_at_limit(self):
+        now = 1_700_000_000_000
+        schedule = {
+            "id": "s1", "name": "network", "kind": "interval", "thread_id": "thread-1",
+            "message": "继续", "enabled": True, "interval_minutes": 1,
+            "created_at": now - 60_000, "run_count": 0, "attempt_count": 0,
+            "retry_on_network": True, "max_attempts": 1, "backoff_seconds": 1,
+        }
+        state = app.default_app_state(); state["schedules"] = [schedule]
+        first = self._tick(state, now, enqueue_result=(False, "network timeout"))
+        pending = first["schedules"][0]
+        self.assertTrue(pending["enabled"])
+        self.assertTrue(pending["retry_pending"])
+        self.assertEqual(pending["attempt_count"], 1)
+        second = self._tick(first, now + 1_000, enqueue_result=(False, "network timeout"))
+        stopped = second["schedules"][0]
+        self.assertFalse(stopped["enabled"])
+        self.assertFalse(stopped["retry_pending"])
+        self.assertEqual(stopped["attempt_count"], 2)
+
+    def test_quota_failure_waits_and_recovery_retries_immediately(self):
+        now = 1_700_000_000_000
+        schedule = {
+            "id": "s1", "name": "quota", "kind": "interval", "thread_id": "thread-1",
+            "message": "继续", "enabled": True, "interval_minutes": 1,
+            "created_at": now - 60_000, "run_count": 0, "attempt_count": 0,
+            "retry_on_quota": True,
+        }
+        state = app.default_app_state(); state["schedules"] = [schedule]
+        first = self._tick(state, now, goals=[{"thread_id": "thread-1", "status": "usage_limited"}], enqueue_result=(False, "429 quota exhausted"))
+        waiting = first["schedules"][0]
+        self.assertTrue(waiting["enabled"])
+        self.assertTrue(waiting["waiting_for_quota"])
+        self.assertFalse(waiting["retry_pending"])
+        second = self._tick(first, now + 1_000, goals=[{"thread_id": "thread-1", "status": "active"}], enqueue_result=(True, "queued"))
+        resumed = second["schedules"][0]
+        self.assertFalse(resumed["waiting_for_quota"])
+        self.assertEqual(resumed["run_count"], 1)
+        self.assertEqual(resumed["attempt_count"], 2)
 
     def test_safe_response_shape_drops_credentials_and_ids(self):
         value = app._safe_response_shape({"remaining": 3, "account_id": "secret", "access_token": "secret", "quota": {"unit": "USD"}})
