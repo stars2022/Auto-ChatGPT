@@ -23,7 +23,7 @@ AUTOCODEX_OPEN_BROWSER=0 python3 app.py
 
 ## 桌面版 / 后台运行
 
-桌面版由 Electron 包裹本地服务，窗口关闭后继续驻留托盘。开发环境先安装 Node.js 22+ 与 Python 3.10+，然后：
+桌面版由 Electron 包裹本地服务，窗口关闭后默认继续驻留系统托盘：macOS 显示在菜单栏右侧，Windows 显示在通知区域，Linux 使用桌面环境提供的托盘区域；托盘菜单会实时显示启用、等待额度和等待重试的任务数量，并可直接打开自动任务页。设置页的“关闭窗口时”可以改为“退出应用并停止后台任务”。开发环境先安装 Node.js 22+ 与 Python 3.10+，然后：
 
 ```bash
 npm install

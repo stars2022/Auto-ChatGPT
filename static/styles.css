@@ -65,6 +65,7 @@ h1, h2, h3, p { margin: 0; }
 .service-state strong, .service-state small { display: block; }
 .service-state strong { font-size: 10px; font-weight: 600; }
 .service-state small { color: var(--tertiary); font-size: 9px; margin-top: 2px; }
+.service-state small + small { margin-top: 3px; color: #79baff; }
 .status-dot { width: 7px; height: 7px; border-radius: 50% !important; background: var(--green); box-shadow: 0 0 0 3px rgba(48,209,88,.12); }
 .privacy-note { padding: 4px 8px; color: var(--tertiary); font-size: 9px; }
 
@@ -265,9 +266,11 @@ input:not([type="checkbox"]):not([type="hidden"]), select, textarea {
 input:not([type="checkbox"]):not([type="hidden"]):hover, select:hover, textarea:hover { --field-border-color: rgba(166,218,255,.42); }
 input:focus, select:focus, textarea:focus { --field-border-color:rgba(10,132,255,.62); border-color:transparent; box-shadow:none; }
 input.field-pressed, select.field-pressed, textarea.field-pressed {
-  --field-press-color:rgba(96,177,255,.2);
+  /* Hover is edge-only; the inner light is reserved for the short pressed
+     state and kept compact so it reads as feedback rather than a spotlight. */
+  --field-press-color:rgba(96,177,255,.14);
   background:
-    radial-gradient(135px circle at var(--press-x, 50%) var(--press-y, 50%), var(--field-press-color), transparent 72%) padding-box,
+    radial-gradient(110px circle at var(--press-x, 50%) var(--press-y, 50%), var(--field-press-color), transparent 72%) padding-box,
     linear-gradient(var(--field-border-color), var(--field-border-color)) border-box;
 }
 textarea { resize: vertical; line-height: 1.45; }

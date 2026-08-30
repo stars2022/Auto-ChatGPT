@@ -51,6 +51,9 @@ function renderMetrics() {
   $('#project-summary-count').textContent = `${projects.length} 个项目`;
   $('#last-sync').textContent = `更新于 ${fmtTime(new Date())}`;
   $('#sidebar-sync').textContent = `最近同步 ${fmtTime(new Date())}`;
+  const platform = window.autoCodex?.platform;
+  const trayName = platform === 'darwin' ? '菜单栏' : platform === 'win32' ? '通知区域' : platform === 'linux' ? '系统托盘' : '桌面托盘';
+  $('#tray-location').textContent = `${trayName}可打开自动任务`;
 }
 
 function renderHero() {
@@ -170,6 +173,7 @@ function renderSettings() {
   form.official_poll_minutes.value = settings.official_poll_minutes || 5;
   form.default_network_retries.value = settings.default_network_retries ?? 0;
   form.default_backoff_seconds.value = settings.default_backoff_seconds || 30;
+  form.close_behavior.value = settings.close_behavior === 'quit' ? 'quit' : 'tray';
   form.notifications.checked = settings.notifications !== false;
   $('#codex-version').textContent = overview.inventory?.codex_version || 'CLI 未找到';
   const cli = overview.inventory?.codex_cli_info || {};
@@ -231,19 +235,36 @@ function syncScheduleForm() {
   $('#network-retry-field').classList.toggle('hidden', !form.retry_on_network.checked);
 }
 
+function updateScheduleThreads(preferredThreadId = '') {
+  const projectSelect = $('#schedule-project');
+  const select = $('#thread-select');
+  const projects = overview?.projects || [];
+  const project = projects.find((item) => String(item.id) === String(projectSelect.value));
+  const threads = project ? (project.threads || []) : (overview?.threads || []);
+  select.innerHTML = threads.map((thread) => `<option value="${esc(thread.id)}">${esc(thread.title || thread.id.slice(0, 12))} · ${esc(statusLabel(thread.goal_status))}</option>`).join('');
+  select.disabled = !threads.length;
+  if (!threads.length) return;
+  const preferred = preferredThreadId && threads.some((thread) => thread.id === preferredThreadId);
+  select.value = preferred ? preferredThreadId : threads[0].id;
+}
+
 function openSchedule(threadId = '', origin = null) {
   closeMenus();
   const form = $('#schedule-form');
   form.reset();
-  const select = $('#thread-select');
   const projects = overview.projects || [];
-  const grouped = projects.map((project) => {
-    const options = (project.threads || []).map((thread) => `<option value="${esc(thread.id)}">${esc(thread.title || thread.id.slice(0, 12))} · ${esc(statusLabel(thread.goal_status))}</option>`).join('');
-    return options ? `<optgroup label="${esc(project.name)} · ${project.thread_count || project.threads.length} 个会话">${options}</optgroup>` : '';
-  }).join('');
-  select.innerHTML = grouped || (overview.threads || []).map((thread) => `<option value="${esc(thread.id)}">${esc(thread.title || thread.id.slice(0, 12))} · ${esc(statusLabel(thread.goal_status))}</option>`).join('');
-  if (!select.options.length) return toast('没有可用会话');
-  if (threadId && [...select.options].some((option) => option.value === threadId)) select.value = threadId;
+  const projectSelect = $('#schedule-project');
+  projectSelect.innerHTML = projects.map((project) => `<option value="${esc(project.id)}">${esc(project.name)} · ${project.thread_count || (project.threads || []).length} 个对话</option>`).join('');
+  if (!projects.length) {
+    projectSelect.innerHTML = '<option value="">未找到分组</option>';
+    projectSelect.disabled = true;
+  } else {
+    projectSelect.disabled = false;
+    const projectForThread = threadId && projects.find((project) => (project.threads || []).some((thread) => thread.id === threadId));
+    projectSelect.value = projectForThread?.id || projects[0].id;
+  }
+  updateScheduleThreads(threadId);
+  if (!$('#thread-select').options.length) return toast('没有可用会话');
   const local = new Date(Date.now() + 5 * 60_000);
   local.setSeconds(0, 0);
   form.run_at.min = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
@@ -307,18 +328,15 @@ document.addEventListener('pointermove', (event) => {
   updatePressedComponent(activePressedComponent, clientX, clientY);
   cancelAnimationFrame(pendingPointerFrame);
   pendingPointerFrame = requestAnimationFrame(() => {
-    // Keep the moving edge highlight on every visible surface. A thread row is
-    // still treated as a navigable surface only while its summary is hovered;
-    // its inline action buttons light independently instead of moving the row.
-    const summary = event.target.closest?.('.thread-summary-click');
+    // Keep the moving edge highlight on every visible surface. Press depth is
+    // handled independently below, so non-clickable cards still glow without
+    // moving when the pointer passes over them.
     document.querySelectorAll(edgeReactiveSelector).forEach((card) => {
       const rect = card.getBoundingClientRect();
-      const summaryHit = card.matches('.thread-row') && Boolean(summary && card.contains(summary));
-      const isInteractive = !card.matches('.thread-row') || summaryHit;
       const dx = Math.max(rect.left - clientX, 0, clientX - rect.right);
       const dy = Math.max(rect.top - clientY, 0, clientY - rect.bottom);
       const distance = Math.hypot(dx, dy);
-      const strength = isInteractive ? Math.max(0, Math.min(1, 1 - distance / 42)) : 0;
+      const strength = Math.max(0, Math.min(1, 1 - distance / 42));
       card.style.setProperty('--mouse-x', `${clientX - rect.left}px`);
       card.style.setProperty('--mouse-y', `${clientY - rect.top}px`);
       card.style.setProperty('--light-strength', strength.toFixed(3));
@@ -369,6 +387,7 @@ $('#hero-check-quota').onclick = () => { switchTab('quota'); $('#cli-status-chec
 $('#continue-form').onsubmit = async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target).entries()); try { const result = await api('/api/goals/resume', { method:'POST', body:JSON.stringify(data) }); $('#continue-dialog').close(); toast(result.unarchived ? '会话已取消归档并继续' : '消息已加入会话队列'); await load(); } catch (error) { toast(`继续失败：${error.message}`); } };
 
 $('#schedule-kind').onchange = syncScheduleForm;
+$('#schedule-project').onchange = () => updateScheduleThreads();
 $('#retry-on-network').onchange = syncScheduleForm;
 $('#schedule-form').onsubmit = async (event) => {
   event.preventDefault();
@@ -391,7 +410,7 @@ $('#official-check').onclick = async () => { try { const result = await api('/ap
 
 $('#choose-cli-directory').onclick = async () => { if (!window.autoCodex?.pickCodexDirectory) return toast('浏览器模式下请直接粘贴 CLI 路径'); const path = await window.autoCodex.pickCodexDirectory(); if (path) { $('#codex-cli-path').value = path; await detectCli(); } };
 $('#detect-cli').onclick = detectCli;
-$('#settings-form').onsubmit = async (event) => { event.preventDefault(); const form = new FormData(event.target); const data = Object.fromEntries(form.entries()); data.poll_seconds = Number(data.poll_seconds || 15); data.official_poll_minutes = Number(data.official_poll_minutes || 5); data.default_network_retries = Number(data.default_network_retries || 0); data.default_backoff_seconds = Number(data.default_backoff_seconds || 30); data.notifications = form.has('notifications'); try { await api('/api/settings', { method:'POST', body:JSON.stringify(data) }); toast('设置已保存'); await load(); } catch (error) { toast(error.message); } };
+$('#settings-form').onsubmit = async (event) => { event.preventDefault(); const form = new FormData(event.target); const data = Object.fromEntries(form.entries()); data.poll_seconds = Number(data.poll_seconds || 15); data.official_poll_minutes = Number(data.official_poll_minutes || 5); data.default_network_retries = Number(data.default_network_retries || 0); data.default_backoff_seconds = Number(data.default_backoff_seconds || 30); data.notifications = form.has('notifications'); data.close_behavior = data.close_behavior === 'quit' ? 'quit' : 'tray'; try { await api('/api/settings', { method:'POST', body:JSON.stringify(data) }); await window.autoCodex?.setCloseBehavior?.(data.close_behavior); toast(data.close_behavior === 'tray' ? '设置已保存，关闭窗口后任务会继续在后台运行' : '设置已保存，关闭窗口后会退出应用'); await load(); } catch (error) { toast(error.message); } };
 
 $('#usage-form').onsubmit = async (event) => { event.preventDefault(); const form = new FormData(event.target); const data = Object.fromEntries(form.entries()); data.enabled = true; data.poll_minutes = Number(data.poll_minutes || 5); try { await api('/api/usage-config', { method:'POST', body:JSON.stringify(data) }); toast('第三方探针已保存'); await load(); } catch (error) { toast(error.message); } };
 $('#usage-check').onclick = async () => { try { const result = await api('/api/usage-check', { method:'POST', body:'{}' }); overview.usage_probe = result.probe; renderUsageConfig(); toast('连接检查完成'); } catch (error) { toast(error.message); } };

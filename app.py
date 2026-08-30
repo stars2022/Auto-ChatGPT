@@ -585,6 +585,11 @@ def default_app_state() -> dict[str, Any]:
             "official_poll_minutes": 5,
             "codex_cli_path": "",
             "notifications": True,
+            # Closing the window normally keeps the local scheduler alive and
+            # hides the UI in the tray/menu bar. Users can opt into a full
+            # application quit from Settings when they prefer conventional
+            # desktop-window behavior.
+            "close_behavior": "tray",
             # 0 means retry forever (with exponential backoff).
             "default_network_retries": 0,
             "default_backoff_seconds": 30,
@@ -1275,11 +1280,15 @@ class Handler(BaseHTTPRequestHandler):
             if requested_cli_path and not codex_command_info(requested_cli_path).get("found"):
                 self.send_json({"error": "指定路径中没有找到可执行的 Codex CLI；可以选择 codex 文件或其所在目录"}, HTTPStatus.BAD_REQUEST); return
             try:
+                requested_close_behavior = str(data.get("close_behavior") or settings.get("close_behavior") or "tray").strip().lower()
+                if requested_close_behavior not in {"tray", "quit"}:
+                    requested_close_behavior = "tray"
                 settings.update({
                     "poll_seconds": max(5, int(data.get("poll_seconds") or settings.get("poll_seconds") or POLL_SECONDS)),
                     "official_poll_minutes": max(1, int(data.get("official_poll_minutes") or settings.get("official_poll_minutes") or 5)),
                     "codex_cli_path": requested_cli_path,
                     "notifications": bool(data.get("notifications", settings.get("notifications", True))),
+                    "close_behavior": requested_close_behavior,
                     "default_network_retries": max(0, int(data.get("default_network_retries") if data.get("default_network_retries") not in (None, "") else settings.get("default_network_retries", 0))),
                     "default_backoff_seconds": max(1, int(data.get("default_backoff_seconds") or settings.get("default_backoff_seconds") or 30)),
                 })

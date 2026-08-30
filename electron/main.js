@@ -8,6 +8,16 @@ let backend = null;
 let win = null;
 let tray = null;
 let quitting = false;
+let trayPollTimer = null;
+let trayRefreshInFlight = false;
+let lastTraySnapshot = {};
+// Window close behavior is persisted by the local backend and mirrored here
+// so the native close button can decide whether to hide or terminate.
+let closeBehavior = 'tray';
+
+function normalizeCloseBehavior(value) {
+  return value === 'quit' ? 'quit' : 'tray';
+}
 
 function backendRoot() {
   return app.isPackaged ? path.join(process.resourcesPath, 'backend') : path.join(__dirname, '..');
@@ -61,6 +71,25 @@ function waitForBackend(attempts = 200) {
   });
 }
 
+function loadCloseBehavior() {
+  return new Promise((resolve) => {
+    const request = http.get(`http://127.0.0.1:${PORT}/api/settings`, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          closeBehavior = normalizeCloseBehavior(data?.settings?.close_behavior);
+        } catch { closeBehavior = 'tray'; }
+        resolve(closeBehavior);
+      });
+    });
+    request.on('error', () => resolve(closeBehavior));
+    request.setTimeout(1200, () => { request.destroy(); resolve(closeBehavior); });
+  });
+}
+
 function createWindow() {
   const windowOptions = {
     width: 1320,
@@ -91,12 +120,31 @@ function createWindow() {
   installApplicationMenu();
   win.loadURL(`http://127.0.0.1:${PORT}`);
   win.on('close', (event) => {
-    if (!quitting) { event.preventDefault(); win.hide(); }
+    if (quitting) {
+      return;
+    }
+    if (closeBehavior === 'quit') {
+      quitting = true;
+      // BrowserWindow.close() only closes the window. Explicitly quit here so
+      // the scheduler and tray process are also stopped when requested.
+      event.preventDefault();
+      app.quit();
+      return;
+    }
+    event.preventDefault();
+    win.hide();
   });
 }
 
 function sendMenuAction(action) {
   if (win && !win.isDestroyed()) win.webContents.send('app-menu-action', action);
+}
+
+function showWindow(action = null) {
+  if (!win || win.isDestroyed()) return;
+  win.show();
+  win.focus();
+  if (action) setTimeout(() => sendMenuAction(action), 40);
 }
 
 function installApplicationMenu() {
@@ -137,6 +185,58 @@ function installApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function trayIconPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'tray-icon.png')
+    : path.join(__dirname, '..', 'assets', 'icon.png');
+}
+
+function trayMenu(snapshot) {
+  if (snapshot && Object.keys(snapshot).length) lastTraySnapshot = snapshot;
+  snapshot = lastTraySnapshot;
+  const schedules = Array.isArray(snapshot.schedules) ? snapshot.schedules : [];
+  const enabled = schedules.filter((item) => item.enabled).length;
+  const waiting = schedules.filter((item) => item.waiting_for_quota).length;
+  const retrying = schedules.filter((item) => item.retry_pending).length;
+  const threads = Array.isArray(snapshot.threads) ? snapshot.threads : [];
+  const limited = threads.filter((item) => item.goal_status === 'usage_limited').length;
+  const status = schedules.length
+    ? `自动任务：启用 ${enabled} · 等待额度 ${waiting} · 等待重试 ${retrying}`
+    : '自动任务：尚未配置';
+  if (tray) {
+    tray.setToolTip(`Auto Codex Companion\n${status}${limited ? `\n额度受限会话：${limited}` : ''}`);
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Auto Codex Companion', enabled: false },
+      { label: status, enabled: false },
+      ...(limited ? [{ label: `额度受限会话：${limited}`, enabled: false }] : []),
+      { label: closeBehavior === 'tray' ? '关闭窗口：保留在后台' : '关闭窗口：退出应用', enabled: false },
+      { type: 'separator' },
+      { label: '打开自动任务', click: () => showWindow('tasks') },
+      { label: '新建自动任务', click: () => showWindow('new-task') },
+      { label: '打开控制面板', click: () => showWindow() },
+      { label: '立即刷新状态', click: () => { refreshTrayStatus(); showWindow('refresh'); } },
+      { type: 'separator' },
+      { label: '退出', click: () => { quitting = true; app.quit(); } },
+    ]));
+  }
+}
+
+function refreshTrayStatus() {
+  if (!tray || trayRefreshInFlight) return;
+  trayRefreshInFlight = true;
+  const request = http.get(`http://127.0.0.1:${PORT}/api/overview`, (response) => {
+    let body = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk) => { body += chunk; });
+    response.on('end', () => {
+      try { if (response.statusCode === 200) trayMenu(JSON.parse(body)); } catch { /* keep last tray state */ }
+      trayRefreshInFlight = false;
+    });
+  });
+  request.on('error', () => { trayRefreshInFlight = false; });
+  request.setTimeout(1500, () => { request.destroy(); trayRefreshInFlight = false; });
+}
+
 ipcMain.handle('pick-codex-directory', async () => {
   const result = await dialog.showOpenDialog(win, {
     title: '选择 Codex CLI 所在目录',
@@ -146,24 +246,32 @@ ipcMain.handle('pick-codex-directory', async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+ipcMain.handle('set-close-behavior', (_event, behavior) => {
+  closeBehavior = normalizeCloseBehavior(behavior);
+  if (tray) trayMenu();
+  return closeBehavior;
+});
+
 function createTray() {
-  tray = new Tray(nativeImage.createEmpty());
-  tray.setToolTip('Auto Codex Companion');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '打开控制面板', click: () => { win.show(); win.focus(); } },
-    { label: '退出', click: () => { quitting = true; app.quit(); } },
-  ]));
-  tray.on('click', () => win.isVisible() ? win.hide() : win.show());
+  const icon = nativeImage.createFromPath(trayIconPath());
+  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
+  trayMenu();
+  tray.on('click', () => win.isVisible() ? win.hide() : showWindow());
+  refreshTrayStatus();
+  trayPollTimer = setInterval(refreshTrayStatus, 15_000);
 }
 
 app.whenReady().then(async () => {
   startBackend();
-  try { await waitForBackend(); createWindow(); createTray(); } catch (error) { dialog.showErrorBox('Auto Codex Companion', error.message); app.quit(); }
+  try { await waitForBackend(); await loadCloseBehavior(); createWindow(); createTray(); } catch (error) { dialog.showErrorBox('Auto Codex Companion', error.message); app.quit(); }
   app.on('activate', () => win?.show());
 });
 
 app.on('before-quit', () => {
   quitting = true;
+  if (trayPollTimer) clearInterval(trayPollTimer);
+  trayPollTimer = null;
+  if (tray && !tray.isDestroyed()) tray.destroy();
   if (!backend || backend.killed) return;
   if (process.platform !== 'win32') {
     try { process.kill(-backend.pid, 'SIGTERM'); } catch { backend.kill(); }
