@@ -12,14 +12,31 @@ jobs:
         include:
           - os: macos-latest
             target: mac
+            arch: arm64
+            build_command: npm run dist:mac -- --arm64
+            artifact_name: auto-codex-companion-mac-arm64
+            artifacts: |
+              dist/*.dmg
+              dist/*.zip
+          - os: macos-15-intel
+            target: mac
+            arch: x64
+            build_command: npm run dist:mac -- --x64
+            artifact_name: auto-codex-companion-mac-x64
             artifacts: |
               dist/*.dmg
               dist/*.zip
           - os: windows-latest
             target: win
+            arch: x64
+            build_command: npm run dist:win
+            artifact_name: auto-codex-companion-win-x64
             artifacts: dist/*.exe
           - os: ubuntu-latest
             target: linux
+            arch: x64
+            build_command: npm run dist:linux
+            artifact_name: auto-codex-companion-linux-x64
             artifacts: |
               dist/*.AppImage
               dist/*.deb
@@ -35,10 +52,10 @@ jobs:
       - run: python -m pip install --upgrade pip pyinstaller certifi
       - run: python scripts/build_backend.py
       - run: npm install
-      - run: npm run dist:${{ matrix.target }}
+      - run: ${{ matrix.build_command }}
       - uses: actions/upload-artifact@v4
         with:
-          name: auto-codex-companion-${{ matrix.target }}
+          name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifacts }}
           if-no-files-found: error
 

@@ -41,12 +41,13 @@ python3 launcher.py stop
 构建安装包：
 
 ```bash
-npm run dist:mac     # .dmg + .zip（当前机器架构）
+npm run dist:mac -- --arm64  # macOS Apple Silicon .dmg + .zip
+npm run dist:mac -- --x64    # macOS Intel/AMD64 .dmg + .zip
 npm run dist:win     # Windows x64 NSIS 安装程序
 npm run dist:linux   # x64 AppImage + .deb
 ```
 
-产物会出现在 `dist/`。`.github/workflows/build.yml` 提供 macOS、Windows、Ubuntu 三平台构建；推送 `v*` 标签后会自动创建 GitHub Release 并上传安装包。
+产物会出现在 `dist/`。`.github/workflows/build.yml` 分别构建 macOS Apple Silicon、macOS Intel/AMD64、Windows x64 和 Linux x64；推送 `v*` 标签后会自动创建 GitHub Release 并上传安装包。
 
 GitHub Actions 会在目标系统用 PyInstaller 生成原生后台二进制并嵌入安装包，因此正式发布的安装包不要求用户另装 Python。直接在另一平台交叉构建时若没有对应平台二进制，Electron 会回退到系统的 `python3`（Windows 为 `py -3`）。
 
