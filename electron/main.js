@@ -226,7 +226,6 @@ function trayMenu(snapshot) {
       { label: quotaLine, enabled: false },
       { label: status, enabled: false },
       ...(limited ? [{ label: `额度受限会话：${limited}`, enabled: false }] : []),
-      { label: closeBehavior === 'tray' ? '关闭窗口：保留在后台' : '关闭窗口：退出应用', enabled: false },
       { type: 'separator' },
       { label: '打开自动任务', click: () => showWindow('tasks') },
       { label: '新建自动任务', click: () => showWindow('new-task') },

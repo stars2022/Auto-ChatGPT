@@ -1,6 +1,6 @@
 {
   "name": "auto-codex-companion",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Local background control plane for Codex queues, usage limits and resumable tasks",
   "homepage": "https://github.com/stars2022/Auto-ChatGPT",
   "author": { "name": "Auto Codex Companion", "email": "opensource@example.com" },
