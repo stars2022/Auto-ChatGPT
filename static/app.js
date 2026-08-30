@@ -29,9 +29,13 @@ function switchTab(tab, updateUrl = true) {
 
 function sourceState() {
   const usage = overview?.official_usage || {};
+  const provider = overview?.usage_probe || {};
+  const providerConfig = overview?.usage_config || {};
   const auth = overview?.inventory?.auth || {};
   if (usage.status === 'ok' && usage.credential_source === 'codex_cli') return { label:'Codex CLI', detail:'通过 CLI app-server 读取 /status 状态', tone:'good' };
   if (usage.status === 'ok') return { label:'OAuth 回退', detail:'CLI 状态不可用，已通过本机 OAuth 读取', tone:'good' };
+  if (provider.status === 'ok') return { label:'第三方提供商', detail:`余额 ${provider.remaining ?? '—'} ${provider.unit || providerConfig.unit || ''} · ${fmtTime(provider.checked_at)} 更新`, tone:'good' };
+  if (providerConfig.enabled && provider.status && !['not_checked', 'not_configured'].includes(provider.status)) return { label:'第三方提供商', detail:`用量检查失败：${provider.detail || provider.status}`, tone:'warn' };
   if (auth.kind === 'oauth') return { label:'OAuth 已登录', detail:'等待下一次用量检查', tone:'warn' };
   return { label:'本地状态', detail:'未连接可读取用量的来源', tone:'neutral' };
 }
