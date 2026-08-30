@@ -364,7 +364,7 @@ def codex_cli_status_probe(configured_path: str | None = None) -> dict[str, Any]
             process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
             process.stdin.flush()
 
-        send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "auto-codex-companion", "title": "Auto Codex Companion", "version": "0.2.5"}, "capabilities": {}}})
+        send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "auto-codex-companion", "title": "Auto Codex Companion", "version": "0.2.6"}, "capabilities": {}}})
         initialized = _wait_json_response(lines, 1, 6)
         if not initialized or initialized.get("error"):
             raise RuntimeError(str((initialized or {}).get("error") or "Codex app-server 初始化超时"))
@@ -977,7 +977,11 @@ def schedule_due(schedule: dict[str, Any], current_ms: int, recovered_threads: s
     matching_recovery = bool(recovered_threads & recovery_targets)
     next_attempt = int(schedule.get("next_attempt_at") or 0)
     if schedule.get("waiting_for_quota"):
-        return matching_recovery
+        # A quota wait has two independent wake-up paths: an early recovery
+        # observed by the regular status probes, or the reset timestamp exposed
+        # by the official subscription endpoint.  Polling continues while the
+        # task sleeps, but no continuation is enqueued before either condition.
+        return matching_recovery or bool(next_attempt and current_ms >= next_attempt)
     if schedule.get("retry_pending"):
         return bool(next_attempt and current_ms >= next_attempt)
     kind = schedule.get("kind")
@@ -991,6 +995,93 @@ def schedule_due(schedule: dict[str, Any], current_ms: int, recovered_threads: s
         at = parse_when(str(schedule.get("run_at") or ""))
         return bool(at is not None and current_ms >= at and not schedule.get("last_run_at"))
     return False
+
+
+def official_quota_reset_at(official_usage: dict[str, Any] | None, current_ms: int) -> int | None:
+    """Return the time at which every currently exhausted official window resets.
+
+    ChatGPT subscription requests are blocked when *any* rate-limit window is
+    exhausted.  If multiple windows are full, resuming at the earliest reset
+    would immediately hit the other one, so use the latest reset among the
+    exhausted windows.  A retained last-good response is usable when a quota
+    poll temporarily fails.
+    """
+    snapshot = official_usage or {}
+    if snapshot.get("status") != "ok" and isinstance(snapshot.get("last_good"), dict):
+        snapshot = snapshot["last_good"]
+    windows = snapshot.get("windows") if isinstance(snapshot.get("windows"), list) else []
+    exhausted_resets: list[int] = []
+    future_resets: list[int] = []
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        reset_at = parse_when(str(window.get("reset_at") or ""))
+        if reset_at is None:
+            continue
+        if reset_at > current_ms:
+            future_resets.append(reset_at)
+        try:
+            exhausted = float(window.get("used_percent") or 0) >= 100
+        except (TypeError, ValueError):
+            exhausted = False
+        if exhausted:
+            exhausted_resets.append(reset_at)
+    if exhausted_resets:
+        return max(exhausted_resets)
+    # Goal state can report usage_limited a little before the rounded percentage
+    # reaches 100.  In that case, the nearest future official reset is the best
+    # available deadline; status polling can still wake the task earlier.
+    return min(future_resets) if future_resets else None
+
+
+def arm_quota_wait(
+    schedule: dict[str, Any],
+    official_usage: dict[str, Any] | None,
+    current_ms: int,
+    poll_ms: int,
+    *,
+    after_failed_attempt: bool = False,
+) -> None:
+    """Put a schedule to sleep until quota recovery without stopping polling."""
+    reset_at = official_quota_reset_at(official_usage, current_ms)
+    was_waiting = bool(schedule.get("waiting_for_quota"))
+    previous_reset = int(schedule.get("quota_reset_at") or 0)
+    previous_attempt = int(schedule.get("next_attempt_at") or 0)
+    schedule["waiting_for_quota"] = True
+    schedule["retry_pending"] = False
+    schedule["quota_reset_at"] = reset_at
+    schedule["blocked_reason"] = "等待额度恢复"
+
+    if reset_at and reset_at > current_ms:
+        # Follow a newly reported deadline in either direction.  This matters
+        # when the five-hour and weekly windows roll over at different times.
+        if not was_waiting or reset_at != previous_reset:
+            schedule["next_attempt_at"] = reset_at
+        elif not previous_attempt:
+            schedule["next_attempt_at"] = reset_at
+        return
+
+    if after_failed_attempt:
+        # A stale reset time must not cause one enqueue attempt per scheduler
+        # tick.  Retry on the next quota polling cadence instead.
+        schedule["next_attempt_at"] = current_ms + poll_ms
+    elif not was_waiting or not previous_attempt:
+        # No reset timestamp is available.  Keep checking status and make one
+        # conservative retry per quota polling interval.
+        schedule["next_attempt_at"] = current_ms if reset_at else current_ms + poll_ms
+
+
+def mark_schedule_completed(schedule: dict[str, Any], current_ms: int) -> None:
+    """Make the target goal's terminal state authoritative for task completion."""
+    schedule["enabled"] = False
+    schedule["completed_at"] = schedule.get("completed_at") or current_ms
+    schedule["last_observed_status"] = "complete"
+    schedule["waiting_for_quota"] = False
+    schedule["retry_pending"] = False
+    schedule["next_attempt_at"] = None
+    schedule["quota_reset_at"] = None
+    schedule["awaiting_active"] = False
+    schedule["blocked_reason"] = None
 
 
 class Scheduler:
@@ -1058,8 +1149,11 @@ class Scheduler:
                 app["official_usage"] = new_official
                 old_windows = old_official.get("windows") or []
                 new_windows = new_official.get("windows") or []
-                old_full = bool(old_windows) and all(float(w.get("used_percent", 0)) >= 100 for w in old_windows)
-                now_open = bool(new_windows) and any(float(w.get("used_percent", 100)) < 100 for w in new_windows)
+                # Hitting either official window blocks requests.  Recovery is
+                # therefore the transition from any exhausted window to every
+                # reported window being available.
+                old_full = bool(old_windows) and any(float(w.get("used_percent", 0)) >= 100 for w in old_windows)
+                now_open = bool(new_windows) and all(float(w.get("used_percent", 100)) < 100 for w in new_windows)
                 if old_full and now_open:
                     app.setdefault("events", []).append({"at": iso(now_ms()), "kind": "official_usage_recovered", "message": "官方订阅额度窗口已恢复"})
                     recovered.add("__official__")
@@ -1082,39 +1176,95 @@ class Scheduler:
                     "message": f"检测到 {len(recovered)} 个线程离开 usage_limited 状态",
                 })
             for schedule in app.get("schedules", []):
-                if schedule.get("kind") == "interval" and current.get(str(schedule.get("thread_id") or "")) == "active":
-                    # Re-arm the watchdog only after the queued continuation is
-                    # observed running. This prevents a slow status update from
-                    # causing the same stopped target to be queued every interval.
-                    schedule["awaiting_active"] = False
-                if schedule.get("waiting_for_quota") and recovered & {str(schedule.get("thread_id") or ""), "__official__", "__usage_probe__"}:
+                thread_id = str(schedule.get("thread_id") or "")
+                target_has_goal = thread_id in current
+                target_status = current.get(thread_id)
+                schedule["last_observed_status"] = target_status or ("no_goal" if not target_has_goal else "unknown")
+
+                # Queue acceptance is not task completion.  The goal database is
+                # the source of truth: only a terminal goal status completes and
+                # disables the automatic task.
+                if target_status == "complete":
+                    newly_completed = not bool(schedule.get("completed_at"))
+                    mark_schedule_completed(schedule, current_ms)
+                    if newly_completed:
+                        app.setdefault("events", []).append({
+                            "at": iso(current_ms), "kind": "schedule_completed", "schedule_id": schedule.get("id"),
+                            "message": f"{schedule.get('name', '计划')}：目标已完成",
+                        })
+                        if settings.get("notifications", True):
+                            notification("Auto Codex Companion", f"{schedule.get('name', '计划')}：目标已完成")
+                    continue
+
+                if not schedule.get("enabled", True):
+                    continue
+
+                if target_status in {"budget_limited", "blocked"}:
+                    schedule["enabled"] = False
                     schedule["waiting_for_quota"] = False
-                    schedule["retry_pending"] = True
-                    schedule["next_attempt_at"] = current_ms
-                if not schedule_due(schedule, current_ms, recovered):
+                    schedule["retry_pending"] = False
+                    schedule["next_attempt_at"] = None
+                    schedule["blocked_reason"] = "目标预算已用尽" if target_status == "budget_limited" else "目标已阻塞，需要处理后重新启用"
+                    continue
+
+                # A running goal needs no queue message.  Observing it active
+                # also confirms that the most recent continuation was accepted.
+                if target_status == "active":
+                    if schedule.get("kind") == "interval":
+                        schedule["last_check_at"] = current_ms
+                    schedule["awaiting_active"] = False
+                    schedule["waiting_for_quota"] = False
+                    schedule["retry_pending"] = False
+                    schedule["next_attempt_at"] = None
+                    schedule["quota_reset_at"] = None
+                    schedule["blocked_reason"] = None
+                    schedule["consecutive_failures"] = 0
+                    continue
+
+                matching_recovery = bool(recovered & {thread_id, "__official__", "__usage_probe__"})
+                if target_status == "usage_limited" and schedule.get("retry_on_quota", True):
+                    waiting_for_dispatch = bool(schedule.get("awaiting_active") and schedule.get("last_attempt_at"))
+                    arm_quota_wait(
+                        schedule, app.get("official_usage"), current_ms, official_poll_ms,
+                        after_failed_attempt=waiting_for_dispatch,
+                    )
+                    # A successful queue write can take a moment to show up as an
+                    # active goal.  Treat a still-limited observation as an
+                    # unsuccessful dispatch and retry once per quota poll, not
+                    # once per fast scheduler tick.
+                    if waiting_for_dispatch:
+                        schedule["awaiting_active"] = False
+                    if not matching_recovery and not schedule_due(schedule, current_ms, recovered):
+                        continue
+
+                # After enqueue succeeds, give the goal one monitoring interval
+                # to become active.  If it remains paused, retry instead of being
+                # stuck forever in an "accepted" state.
+                if target_status == "paused" and schedule.get("awaiting_active"):
+                    last_attempt = int(schedule.get("last_attempt_at") or 0)
+                    if schedule.get("kind") == "interval":
+                        observation_ms = max(1, int(schedule.get("interval_minutes") or 60)) * 60_000
+                    else:
+                        observation_ms = official_poll_ms
+                    if last_attempt and current_ms - last_attempt < observation_ms:
+                        continue
+                    schedule["awaiting_active"] = False
+
+                due = schedule_due(schedule, current_ms, recovered)
+                # The default smart monitor also restores a paused goal even
+                # when the pause was caused by a transient failure rather than a
+                # quota transition.  A scheduled one-shot gains the same recovery
+                # behavior after its first dispatch.
+                if not due and target_status == "paused" and not schedule.get("waiting_for_quota") and not schedule.get("retry_pending"):
+                    if schedule.get("kind") == "quota_recovered":
+                        due = True
+                    elif schedule.get("kind") == "at_time" and schedule.get("last_run_at"):
+                        due = True
+                if not due:
                     continue
                 if schedule.get("kind") == "interval":
-                    # An interval schedule is a watchdog, not a repeating message.
-                    # Each due interval observes the target first and only queues a
-                    # continuation when the target is no longer running.
-                    target_status = current.get(str(schedule.get("thread_id") or ""))
+                    # Interval is a status watchdog, not a repeating message.
                     schedule["last_check_at"] = current_ms
-                    schedule["last_observed_status"] = target_status or "stopped"
-                    if target_status == "active":
-                        schedule["waiting_for_quota"] = False
-                        schedule["retry_pending"] = False
-                        schedule["next_attempt_at"] = None
-                        schedule["blocked_reason"] = None
-                        schedule["consecutive_failures"] = 0
-                        continue
-                    if schedule.get("awaiting_active"):
-                        continue
-                    if target_status == "usage_limited" and schedule.get("retry_on_quota", True):
-                        schedule["waiting_for_quota"] = True
-                        schedule["retry_pending"] = False
-                        schedule["next_attempt_at"] = None
-                        schedule["blocked_reason"] = "等待额度恢复"
-                        continue
                 allowed, budget_reason = budget_guard(schedule)
                 if not allowed:
                     schedule["enabled"] = False
@@ -1139,13 +1289,13 @@ class Scheduler:
                     schedule["run_count"] = int(schedule.get("run_count") or 0) + 1
                     schedule["consecutive_failures"] = 0
                     schedule["waiting_for_quota"] = False
-                    if schedule.get("kind") == "interval":
-                        schedule["awaiting_active"] = True
-                    if schedule.get("kind") == "at_time":
-                        schedule["enabled"] = False
-                        schedule["completed_at"] = attempt_at
+                    schedule["quota_reset_at"] = None
+                    schedule["awaiting_active"] = target_has_goal
                 elif error_kind == "quota" and schedule.get("retry_on_quota", True):
-                    schedule["waiting_for_quota"] = True
+                    arm_quota_wait(
+                        schedule, app.get("official_usage"), attempt_at, official_poll_ms,
+                        after_failed_attempt=True,
+                    )
                     schedule["consecutive_failures"] = int(schedule.get("consecutive_failures") or 0) + 1
                 elif error_kind == "network" and schedule.get("retry_on_network", True):
                     failures = int(schedule.get("consecutive_failures") or 0) + 1
@@ -1317,7 +1467,7 @@ class Handler(BaseHTTPRequestHandler):
                 "created_at": now_ms(), "last_run_at": None, "last_check_at": None, "last_observed_status": None,
                 "last_attempt_at": None, "run_count": 0, "last_result": None,
                 "attempt_count": 0, "consecutive_failures": 0, "waiting_for_quota": False, "retry_pending": False,
-                "next_attempt_at": None, "blocked_reason": None, "completed_at": None, "awaiting_active": False,
+                "next_attempt_at": None, "quota_reset_at": None, "blocked_reason": None, "completed_at": None, "awaiting_active": False,
             }
             app.setdefault("schedules", []).append(item); write_app_state(app); self.send_json(item, HTTPStatus.CREATED); return
         if parsed.path == "/api/schedules/toggle":
@@ -1328,6 +1478,8 @@ class Handler(BaseHTTPRequestHandler):
             item["waiting_for_quota"] = False
             item["retry_pending"] = False
             item["next_attempt_at"] = None
+            item["quota_reset_at"] = None
+            item["awaiting_active"] = False
             item["consecutive_failures"] = 0
             if enabled:
                 item["blocked_reason"] = None

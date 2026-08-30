@@ -175,7 +175,7 @@ function renderProviderSummary() {
 }
 
 function scheduleTriggerLabel(item) {
-  if (item.kind === 'quota_recovered') return '额度恢复后';
+  if (item.kind === 'quota_recovered') return '持续监测';
   if (item.kind === 'interval') return `每 ${item.interval_minutes} 分钟检查`;
   return `指定时间 ${fmtTime(item.run_at)}`;
 }
@@ -201,13 +201,17 @@ function renderTasks() {
   $('#scheduler-monitor').textContent = monitor.status_checked_at
     ? `状态每 ${overview.settings?.poll_seconds || 15} 秒 · 最近 ${fmtTime(monitor.status_checked_at)} · 已检查 ${monitor.status_check_count || 0} 次`
     : '后台状态检查尚未启动';
-  const stats = [['启用中', schedules.filter((item) => item.enabled).length], ['等待额度', schedules.filter((item) => item.waiting_for_quota).length], ['等待重试', schedules.filter((item) => item.retry_pending).length], ['成功执行', schedules.reduce((sum, item) => sum + Number(item.run_count || 0), 0)]];
+  const stats = [['启用中', schedules.filter((item) => item.enabled).length], ['等待额度', schedules.filter((item) => item.waiting_for_quota).length], ['等待重试', schedules.filter((item) => item.retry_pending).length], ['已完成', schedules.filter((item) => item.completed_at).length]];
   $('#task-stats').innerHTML = stats.map(([label, value]) => `<div class="task-stat"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join('');
   $('#schedule-list').innerHTML = schedules.length ? schedules.map((item) => {
     const state = scheduleState(item);
     const attempts = Number(item.attempt_count ?? item.run_count ?? 0);
     const runSummary = attempts ? `成功 ${item.run_count || 0} 次 · 尝试 ${attempts} 次` : '尚未触发';
-    const stateDetail = item.waiting_for_quota ? '额度恢复后立即重试' : item.retry_pending && item.next_attempt_at ? `下次重试 ${fmtTime(item.next_attempt_at)}` : item.kind === 'quota_recovered' && item.enabled && !attempts ? '等待下一次额度恢复' : item.blocked_reason || '';
+    const stateDetail = item.waiting_for_quota
+      ? `${item.quota_reset_at ? `预计 ${fmtTime(item.quota_reset_at)} 重置` : item.next_attempt_at ? `下次检查 ${fmtTime(item.next_attempt_at)}` : '等待额度恢复'}`
+      : item.retry_pending && item.next_attempt_at
+        ? `下次重试 ${fmtTime(item.next_attempt_at)}`
+        : item.kind === 'quota_recovered' && item.enabled && !attempts ? '正在监测' : item.blocked_reason || '';
     return `<div class="schedule-item"><div class="schedule-main"><div class="schedule-title">${esc(item.name)}<span class="badge ${state.tone}">${state.label}</span></div><div class="schedule-meta">${esc(scheduleTriggerLabel(item))} · ${esc(scheduleExecutionLabel(item))} · ${runSummary}${stateDetail ? ` · ${esc(stateDetail)}` : ''}</div></div><div class="schedule-actions"><button class="mini-button toggle-schedule" data-id="${esc(item.id)}" data-enabled="${!item.enabled}">${item.enabled ? '暂停' : item.completed_at ? '重新运行' : '启用'}</button><button class="mini-button delete-schedule" data-id="${esc(item.id)}">删除</button></div></div>`;
   }).join('') : '<div class="empty">还没有自动任务</div>';
   document.querySelectorAll('.toggle-schedule').forEach((button) => button.onclick = async () => { try { await api('/api/schedules/toggle', { method:'POST', body:JSON.stringify({ id:button.dataset.id, enabled:button.dataset.enabled === 'true' }) }); toast('任务状态已更新'); await load(); } catch (error) { toast(error.message); } });

@@ -6,7 +6,7 @@ import app
 
 
 class AppLogicTests(unittest.TestCase):
-    def _tick(self, state, now, goals=None, threads=None, enqueue_result=(True, "queued")):
+    def _tick(self, state, now, goals=None, threads=None, enqueue_result=(True, "queued"), official=None):
         """Run one scheduler tick with all external state held deterministic."""
         written = {}
         state = deepcopy(state)
@@ -14,11 +14,14 @@ class AppLogicTests(unittest.TestCase):
             "official_poll_minutes": 60,
             "notifications": False,
         })
-        state["official_usage"] = {
-            "status": "ok",
-            "checked_at": app.iso(now),
-            "windows": [],
-        }
+        if official is not None:
+            state["official_usage"] = deepcopy(official)
+        elif (state.get("official_usage") or {}).get("status") != "ok":
+            state["official_usage"] = {
+                "status": "ok",
+                "checked_at": app.iso(now),
+                "windows": [],
+            }
         state.setdefault("usage_probe", {"status": "not_configured"})
         with patch.object(app, "now_ms", return_value=now), \
              patch.object(app, "read_app_state", return_value=state), \
@@ -62,14 +65,13 @@ class AppLogicTests(unittest.TestCase):
         state = app.default_app_state(); state["schedules"] = [schedule]
         result = self._tick(state, now, goals=[{"thread_id": "thread-1", "status": "active"}])
         saved = result["schedules"][0]
-        self.assertEqual(saved["last_check_at"], now)
         self.assertEqual(saved["last_observed_status"], "active")
         self.assertEqual(saved["attempt_count"], 0)
         self.assertEqual(saved["run_count"], 0)
         self.assertFalse(saved["retry_pending"])
-        early = self._tick(result, now + 30_000, goals=[{"thread_id": "thread-1", "status": "complete"}])
+        early = self._tick(result, now + 30_000, goals=[{"thread_id": "thread-1", "status": "paused"}])
         self.assertEqual(early["schedules"][0]["attempt_count"], 0)
-        due = self._tick(early, now + 60_000, goals=[{"thread_id": "thread-1", "status": "complete"}])
+        due = self._tick(early, now + 60_000, goals=[{"thread_id": "thread-1", "status": "paused"}])
         self.assertEqual(due["schedules"][0]["attempt_count"], 1)
         self.assertEqual(due["schedules"][0]["run_count"], 1)
 
@@ -81,21 +83,21 @@ class AppLogicTests(unittest.TestCase):
             "created_at": now - 60_000, "run_count": 0, "attempt_count": 0,
         }
         state = app.default_app_state(); state["schedules"] = [schedule]
-        result = self._tick(state, now, goals=[{"thread_id": "thread-1", "status": "complete"}])
+        result = self._tick(state, now, goals=[{"thread_id": "thread-1", "status": "paused"}])
         saved = result["schedules"][0]
-        self.assertEqual(saved["last_observed_status"], "complete")
+        self.assertEqual(saved["last_observed_status"], "paused")
         self.assertEqual(saved["attempt_count"], 1)
         self.assertEqual(saved["run_count"], 1)
         self.assertTrue(saved["awaiting_active"])
-        repeated_stop = self._tick(result, now + 60_000, goals=[{"thread_id": "thread-1", "status": "complete"}])
+        repeated_stop = self._tick(result, now + 30_000, goals=[{"thread_id": "thread-1", "status": "paused"}])
         self.assertEqual(repeated_stop["schedules"][0]["attempt_count"], 1)
-        observed_active = self._tick(repeated_stop, now + 90_000, goals=[{"thread_id": "thread-1", "status": "active"}])
+        observed_active = self._tick(repeated_stop, now + 45_000, goals=[{"thread_id": "thread-1", "status": "active"}])
         self.assertFalse(observed_active["schedules"][0]["awaiting_active"])
-        stopped_again = self._tick(observed_active, now + 120_000, goals=[{"thread_id": "thread-1", "status": "complete"}])
+        stopped_again = self._tick(observed_active, now + 120_000, goals=[{"thread_id": "thread-1", "status": "paused"}])
         self.assertEqual(stopped_again["schedules"][0]["attempt_count"], 2)
         self.assertEqual(stopped_again["schedules"][0]["run_count"], 2)
 
-    def test_at_time_success_completes_and_disables_schedule(self):
+    def test_at_time_queue_success_waits_for_goal_completion(self):
         now = 1_700_000_000_000
         schedule = {
             "id": "s1", "name": "once", "kind": "at_time", "thread_id": "thread-1",
@@ -105,10 +107,15 @@ class AppLogicTests(unittest.TestCase):
         state = app.default_app_state(); state["schedules"] = [schedule]
         result = self._tick(state, now)
         saved = result["schedules"][0]
-        self.assertFalse(saved["enabled"])
-        self.assertIsNotNone(saved["completed_at"])
+        self.assertTrue(saved["enabled"])
+        self.assertIsNone(saved.get("completed_at"))
         self.assertEqual(saved["run_count"], 1)
         self.assertEqual(saved["attempt_count"], 1)
+        completed = self._tick(result, now + 1_000, goals=[{"thread_id": "thread-1", "status": "complete"}])
+        finished = completed["schedules"][0]
+        self.assertFalse(finished["enabled"])
+        self.assertIsNotNone(finished["completed_at"])
+        self.assertEqual(finished["attempt_count"], 1)
 
     def test_network_failure_retries_then_stops_at_limit(self):
         now = 1_700_000_000_000
@@ -145,11 +152,70 @@ class AppLogicTests(unittest.TestCase):
         self.assertTrue(waiting["waiting_for_quota"])
         self.assertFalse(waiting["retry_pending"])
         self.assertEqual(waiting["attempt_count"], 0)
-        second = self._tick(first, now + 1_000, goals=[{"thread_id": "thread-1", "status": "complete"}], enqueue_result=(True, "queued"))
+        second = self._tick(first, now + 1_000, goals=[{"thread_id": "thread-1", "status": "paused"}], enqueue_result=(True, "queued"))
         resumed = second["schedules"][0]
         self.assertFalse(resumed["waiting_for_quota"])
         self.assertEqual(resumed["run_count"], 1)
         self.assertEqual(resumed["attempt_count"], 1)
+
+    def test_quota_wait_uses_latest_exhausted_window_reset_and_keeps_polling(self):
+        now = 1_700_000_000_000
+        reset_at = now + 120_000
+        official = {
+            "status": "ok", "checked_at": app.iso(now),
+            "windows": [
+                {"name": "5_hour", "used_percent": 100, "reset_at": app.iso(now + 60_000)},
+                {"name": "7_day", "used_percent": 100, "reset_at": app.iso(reset_at)},
+            ],
+        }
+        schedule = {
+            "id": "s1", "name": "quota", "kind": "quota_recovered", "thread_id": "thread-1",
+            "message": "继续", "enabled": True, "created_at": now, "run_count": 0,
+            "attempt_count": 0, "retry_on_quota": True,
+        }
+        state = app.default_app_state(); state["schedules"] = [schedule]
+        waiting_state = self._tick(
+            state, now, goals=[{"thread_id": "thread-1", "status": "usage_limited"}], official=official,
+        )
+        waiting = waiting_state["schedules"][0]
+        self.assertTrue(waiting["waiting_for_quota"])
+        self.assertEqual(waiting["quota_reset_at"], reset_at)
+        self.assertEqual(waiting["next_attempt_at"], reset_at)
+        checked_count = waiting_state["monitor"]["status_check_count"]
+
+        early = self._tick(waiting_state, now + 60_000, goals=[{"thread_id": "thread-1", "status": "usage_limited"}])
+        self.assertEqual(early["schedules"][0]["attempt_count"], 0)
+        self.assertGreater(early["monitor"]["status_check_count"], checked_count)
+
+        resumed = self._tick(early, reset_at, goals=[{"thread_id": "thread-1", "status": "usage_limited"}])
+        self.assertEqual(resumed["schedules"][0]["attempt_count"], 1)
+        self.assertEqual(resumed["schedules"][0]["run_count"], 1)
+        no_duplicate = self._tick(resumed, reset_at + 15_000, goals=[{"thread_id": "thread-1", "status": "usage_limited"}])
+        self.assertEqual(no_duplicate["schedules"][0]["attempt_count"], 1)
+        self.assertEqual(no_duplicate["schedules"][0]["next_attempt_at"], reset_at + 15_000 + 60 * 60_000)
+
+    def test_completed_goal_marks_monitor_complete_without_another_enqueue(self):
+        now = 1_700_000_000_000
+        schedule = {
+            "id": "s1", "name": "done", "kind": "quota_recovered", "thread_id": "thread-1",
+            "message": "继续", "enabled": True, "created_at": now, "run_count": 2,
+            "attempt_count": 2, "waiting_for_quota": True,
+        }
+        state = app.default_app_state(); state["schedules"] = [schedule]
+        result = self._tick(state, now, goals=[{"thread_id": "thread-1", "status": "complete"}])
+        saved = result["schedules"][0]
+        self.assertFalse(saved["enabled"])
+        self.assertEqual(saved["completed_at"], now)
+        self.assertEqual(saved["attempt_count"], 2)
+        self.assertFalse(saved["waiting_for_quota"])
+
+        # Completion is target state, so it is still reflected while the user
+        # has manually paused the monitor.
+        paused_state = app.default_app_state()
+        paused_schedule = deepcopy(schedule); paused_schedule["enabled"] = False
+        paused_state["schedules"] = [paused_schedule]
+        paused_result = self._tick(paused_state, now, goals=[{"thread_id": "thread-1", "status": "complete"}])
+        self.assertEqual(paused_result["schedules"][0]["completed_at"], now)
 
     def test_safe_response_shape_drops_credentials_and_ids(self):
         value = app._safe_response_shape({"remaining": 3, "account_id": "secret", "access_token": "secret", "quota": {"unit": "USD"}})
