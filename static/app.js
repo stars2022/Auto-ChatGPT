@@ -125,6 +125,36 @@ function renderQuota() {
   $('#probe-pill').textContent = usage.status === 'ok' ? source.label : '未检查';
   const result = $('#official-result');
   if (usage.status && usage.status !== 'not_checked') { result.classList.remove('hidden'); result.textContent = usage.status === 'ok' ? `来源：${usage.credential_source || usage.auth_kind}\n套餐：${usage.plan_type || usage.data?.plan_type || '—'}\n检查：${usage.checked_at || '—'}` : `${usage.status}\n${usage.detail || ''}`; } else result.classList.add('hidden');
+  renderProviderSummary();
+}
+
+function renderProviderSummary() {
+  const config = overview.usage_config || {};
+  const probe = overview.usage_probe || {};
+  const pill = $('#overview-provider-pill');
+  const detail = $('#overview-provider-detail');
+  if (!pill || !detail) return;
+  if (!config.enabled && !config.api_key_configured) {
+    pill.className = 'badge neutral';
+    pill.textContent = '未配置';
+    detail.textContent = '可在用量页配置兼容的余额接口。';
+    return;
+  }
+  if (probe.status === 'ok') {
+    pill.className = 'badge good';
+    pill.textContent = '已连接';
+    detail.textContent = `余额：${probe.remaining ?? '—'} ${probe.unit || config.unit || ''} · 检查于 ${fmtTime(probe.checked_at)}`;
+    return;
+  }
+  if (probe.status && probe.status !== 'not_checked' && probe.status !== 'not_configured') {
+    pill.className = 'badge warn';
+    pill.textContent = '检查失败';
+    detail.textContent = `${probe.status}${probe.detail ? ` · ${probe.detail}` : ''}`;
+    return;
+  }
+  pill.className = 'badge warn';
+  pill.textContent = '等待检查';
+  detail.textContent = '已配置，后台会按设定间隔刷新余额。';
 }
 
 function scheduleTriggerLabel(item) {

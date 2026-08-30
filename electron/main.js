@@ -166,7 +166,7 @@ function installApplicationMenu() {
         { role: 'hideOthers', label: '隐藏其他' },
         { role: 'unhide', label: '显示全部' },
         { type: 'separator' },
-        { role: 'quit', label: '退出' },
+        { role: 'quit', label: '退出', accelerator: 'Cmd+Q' },
       ],
     }] : []),
     {
@@ -174,7 +174,7 @@ function installApplicationMenu() {
       submenu: [
         { label: '新建自动任务', accelerator: 'CmdOrCtrl+N', click: () => sendMenuAction('new-task') },
         { type: 'separator' },
-        { role: 'close', label: '关闭窗口' },
+        { role: 'close', label: '关闭窗口', accelerator: process.platform === 'darwin' ? 'Cmd+W' : 'Alt+F4' },
       ],
     },
     { label: '编辑', submenu: [{ role: 'undo', label: '撤销' }, { role: 'redo', label: '重做' }, { type: 'separator' }, { role: 'cut', label: '剪切' }, { role: 'copy', label: '拷贝' }, { role: 'paste', label: '粘贴' }, { role: 'selectAll', label: '全选' }] },
@@ -255,6 +255,9 @@ ipcMain.handle('set-close-behavior', (_event, behavior) => {
 function createTray() {
   const icon = nativeImage.createFromPath(trayIconPath());
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
+  // A short title keeps the status item discoverable on macOS even when the
+  // icon is rendered very small or the menu bar is using a dark appearance.
+  if (process.platform === 'darwin') tray.setTitle('AC');
   trayMenu();
   tray.on('click', () => win.isVisible() ? win.hide() : showWindow());
   refreshTrayStatus();
