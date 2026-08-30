@@ -30,7 +30,7 @@
       { "from": "launcher.py", "to": "backend/launcher.py" },
       { "from": "static", "to": "backend/static" },
       { "from": "README.md", "to": "backend/README.md" },
-      { "from": "assets/icon-32.png", "to": "tray-icon.png" }
+      { "from": "assets/icon-16.png", "to": "tray-icon.png" }
     ],
     "mac": { "icon": "assets/icon.icns", "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
     "win": { "icon": "assets/icon.ico", "target": ["nsis"], "artifactName": "Auto-Codex-Companion-Setup-${version}-${arch}.${ext}" },

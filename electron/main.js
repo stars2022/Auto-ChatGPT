@@ -253,10 +253,13 @@ ipcMain.handle('set-close-behavior', (_event, behavior) => {
 });
 
 function createTray() {
-  const icon = nativeImage.createFromPath(trayIconPath());
+  // macOS status items are text-first here: an empty image plus the short
+  // `AC` title avoids a large square app icon taking over the menu bar. The
+  // compact 16px asset remains available for Windows/Linux notification areas.
+  const icon = process.platform === 'darwin'
+    ? nativeImage.createEmpty()
+    : nativeImage.createFromPath(trayIconPath());
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
-  // A short title keeps the status item discoverable on macOS even when the
-  // icon is rendered very small or the menu bar is using a dark appearance.
   if (process.platform === 'darwin') tray.setTitle('AC');
   trayMenu();
   tray.on('click', () => win.isVisible() ? win.hide() : showWindow());
