@@ -45,13 +45,13 @@
         </section>
 
         <section class="tab-panel" data-panel="tasks">
-          <div class="section-toolbar"><span></span><button class="primary-button" id="new-schedule">新建自动任务</button></div>
+          <div class="section-toolbar"><span id="scheduler-monitor">后台检查状态读取中…</span><button class="primary-button" id="new-schedule">新建自动任务</button></div>
           <div class="task-stats" id="task-stats"></div>
           <article class="surface-card"><header class="card-header"><div><h3>已配置任务</h3></div></header><div id="schedule-list" class="schedule-list"><div class="empty">还没有任务</div></div></article>
         </section>
 
         <section class="tab-panel" data-panel="quota">
-          <div class="section-toolbar"><span></span><button class="primary-button" id="cli-status-check">刷新官方额度</button></div>
+          <div class="section-toolbar"><span id="quota-monitor">额度检查状态读取中…</span><button class="primary-button" id="cli-status-check">刷新官方额度</button></div>
           <article class="surface-card cli-card"><div class="cli-icon">›_</div><div class="cli-main"><div class="card-title-line"><h3>Codex CLI</h3><span id="cli-pill" class="badge neutral">检测中</span></div><p id="cli-summary">正在查找当前平台的 Codex CLI…</p><code id="cli-path">—</code></div><button class="secondary-button" data-go-tab="settings">更改路径</button></article>
           <div id="quota-windows" class="window-grid"><div class="empty">刷新后显示额度窗口</div></div>
           <div class="source-grid">
@@ -69,7 +69,7 @@
             <div class="settings-save"><button class="primary-button" type="submit">保存设置</button></div>
           </form>
           <article class="surface-card diagnostics"><header class="card-header"><div><h3>诊断信息</h3><p>只显示文件元数据和脱敏配置键</p></div></header><details><summary>可访问配置文件</summary><div id="inventory-list" class="inventory-list"></div></details><details><summary>配置键名</summary><div id="config-keys" class="config-keys"></div></details></article>
-          <article class="surface-card about-card"><header class="card-header"><div><h3>关于</h3></div><span class="badge neutral">v0.2.4</span></header><details><summary>发现</summary><p class="about-copy">扩展与实验性入口。</p></details></article>
+          <article class="surface-card about-card"><header class="card-header"><div><h3>关于</h3></div><span class="badge neutral">v0.2.5</span></header><details><summary>发现</summary><p class="about-copy">扩展与实验性入口。</p></details></article>
         </section>
       </main>
     </section>
@@ -81,17 +81,18 @@
       <header><div><span class="dialog-kicker" id="thread-detail-project">会话详情</span><h3 id="thread-detail-title">未命名会话</h3></div><button type="button" class="dialog-close" data-close-dialog="thread-detail-dialog" aria-label="关闭">×</button></header>
       <div class="thread-focus-meta" id="thread-detail-meta"></div>
       <section class="thread-focus-objective"><span>当前目标</span><p id="thread-detail-objective"></p></section>
+      <section class="thread-focus-subagents hidden" id="thread-detail-subagents"><header><span>协作代理</span><b id="thread-detail-subagent-count"></b></header><div id="thread-detail-subagent-list"></div></section>
       <section class="thread-focus-id"><span>会话 ID</span><code id="thread-detail-id"></code><button class="mini-button" type="button" id="copy-detail-thread-id">复制</button></section>
       <footer><span>ESC 关闭</span><div><button class="secondary-button" type="button" id="detail-schedule">自动继续</button><button class="primary-button" type="button" id="detail-continue">继续会话</button></div></footer>
     </div>
   </dialog>
-  <dialog id="continue-dialog" class="app-dialog"><form method="dialog" id="continue-form"><header><div><span class="dialog-kicker">继续会话</span><h3 id="continue-title">发送后续消息</h3></div><button type="button" class="dialog-close" data-close-dialog="continue-dialog">×</button></header><input type="hidden" name="thread_id" /><label>发送给 Codex<textarea name="message" rows="5" required>继续之前的任务；先检查当前状态，再从上次停下的位置继续。</textarea></label><div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="continue-dialog">取消</button><button class="primary-button" type="submit">继续会话</button></div></form></dialog>
+  <dialog id="continue-dialog" class="app-dialog"><form method="dialog" id="continue-form"><header><div><span class="dialog-kicker">继续</span><h3 id="continue-title">继续会话</h3></div><button type="button" class="dialog-close" data-close-dialog="continue-dialog">×</button></header><input type="hidden" name="thread_id" /><label>继续方式<select name="execution_mode" id="continue-execution-mode"><option value="auto">自动选择（目标优先）</option><option value="goal">继续目标</option><option value="message">发送消息</option></select></label><label id="continue-message-field">继续消息<textarea name="message" rows="5">继续之前的任务；先检查当前状态，再从上次停下的位置继续。</textarea></label><div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="continue-dialog">取消</button><button class="primary-button" type="submit" id="continue-submit">继续</button></div></form></dialog>
   <dialog id="schedule-dialog" class="app-dialog schedule-dialog"><form method="dialog" id="schedule-form">
     <header><div><span class="dialog-kicker">自动任务</span><h3>安排自动继续</h3></div><button type="button" class="dialog-close" data-close-dialog="schedule-dialog">×</button></header>
     <div class="form-grid"><label>名称<input name="name" value="额度恢复后继续" required /></label><label>分组 / 项目<select name="project_id" id="schedule-project" required></select></label><label>目标对话<select name="thread_id" id="thread-select" required disabled></select></label></div>
     <section class="form-section"><header><div><strong>触发条件</strong></div></header><div class="form-grid trigger-grid"><label>触发方式<select name="kind" id="schedule-kind"><option value="quota_recovered">额度恢复后</option><option value="interval">固定间隔检查</option><option value="at_time">指定时间</option></select></label><label id="interval-field" class="hidden">检查间隔（分钟）<input name="interval_minutes" type="number" min="1" value="60" /></label><label id="time-field" class="hidden">执行时间<button type="button" class="picker-button" id="schedule-run-at-button"><span id="schedule-run-at-label">选择日期和时间</span><i>▦</i></button><input name="run_at" id="schedule-run-at" type="hidden" /></label></div></section>
     <section class="form-section"><header><div><strong>失败处理</strong></div></header><div class="check-grid"><label><input name="retry_on_network" id="retry-on-network" type="checkbox" checked />网络失败自动重试</label><label><input name="retry_on_quota" type="checkbox" checked />额度耗尽后等待恢复</label></div><label id="network-retry-field">网络重试上限<input name="max_attempts" type="number" min="0" value="3" /><small>0 表示持续重试；超过上限后任务自动停用</small></label></section>
-    <section class="form-section"><label>继续消息<textarea name="message" rows="4" required>继续之前的任务；先检查当前状态，再从上次停下的位置继续。</textarea></label><details class="budget-options"><summary>预算限制（可选）</summary><div class="form-grid"><label>Token 上限<input name="token_budget" type="number" min="1" placeholder="不限制" /></label><label>价格预算 USD<input name="price_budget_usd" type="number" min="0" step="0.01" placeholder="不限制" /></label><label>单价 / 1K tokens<input name="price_per_1k_tokens" type="number" min="0" step="0.0001" placeholder="与价格预算同时填写" /></label></div></details></section>
+    <section class="form-section"><label>继续方式<select name="execution_mode" id="schedule-execution-mode"><option value="auto">自动选择（目标优先）</option><option value="goal">继续目标</option><option value="message">发送消息</option></select></label><label id="schedule-message-field">继续消息<textarea name="message" rows="4">继续之前的任务；先检查当前状态，再从上次停下的位置继续。</textarea></label><details class="budget-options"><summary>预算限制（可选）</summary><div class="form-grid"><label>Token 上限<input name="token_budget" type="number" min="1" placeholder="不限制" /></label><label>价格预算 USD<input name="price_budget_usd" type="number" min="0" step="0.01" placeholder="不限制" /></label><label>单价 / 1K tokens<input name="price_per_1k_tokens" type="number" min="0" step="0.0001" placeholder="与价格预算同时填写" /></label></div></details></section>
     <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="schedule-dialog">取消</button><button class="primary-button" type="submit">创建任务</button></div>
   </form></dialog>
   <dialog id="datetime-dialog" class="app-dialog compact datetime-dialog">

@@ -4,10 +4,10 @@
 
 一个运行在本机的轻量 Codex/ChatGPT 辅助面板，专门处理两件事：
 
-1. 按时间把消息加入已有 Codex 线程队列（使用 `codex queue`）。
-2. 监测线程的 `usage_limited` 状态，或监测额度接口恢复后自动继续。
+1. 按时间继续已有 Codex 线程；目标会话优先执行 `/goal resume`，普通会话才发送继续消息。
+2. 定期检查 Codex CLI 状态与额度窗口，在 `usage_limited` 恢复后自动继续。
 
-控制面板采用原生桌面软件风格：会话按工作目录归入项目，通过“项目 → 会话”主从视图进行查找；继续会话、创建自动任务和更多操作使用应用内对话框与菜单。用量页优先通过 Codex CLI 的 app-server 读取 `/status` 对应的机器可读额度，失败后再回退到官方 OAuth。
+控制面板采用原生桌面软件风格：会话按工作目录归入项目，subagent 收纳在父会话详情中，通过“项目 → 会话”主从视图进行查找；继续会话、创建自动任务和更多操作使用应用内对话框与菜单。用量页优先通过 Codex CLI 的 app-server 读取 `/status` 对应的机器可读额度，失败后再回退到官方 OAuth，并显示后台检查的最近时间、下次时间和累计次数。
 
 ## 启动
 
@@ -83,4 +83,4 @@ GitHub Actions 会在目标系统用 PyInstaller 生成原生后台二进制并�
 
 - `auth.json` 只读取到内存，用于发起本地用户主动启用的请求；接口响应会做字段脱敏。
 - 面板 API 只绑定 `127.0.0.1`，计划数据放在 `~/.autocodex/state.json`。
-- 面板不会直接修改 Codex 的 SQLite 数据库；继续操作仅调用公开 CLI 子命令 `codex unarchive`（需要时）和 `codex queue`。
+- 面板不会直接修改 Codex 的 SQLite 数据库；继续操作仅调用公开 CLI 子命令 `codex unarchive`（需要时）和 `codex queue`。存在未完成目标时，队列内容是 Codex 控制命令 `/goal resume`，而不是自由文本提示。

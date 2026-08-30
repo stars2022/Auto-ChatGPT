@@ -39,6 +39,7 @@ STATE_FILE = STATE_DIR / "state.json"
 HOST = os.environ.get("AUTOCODEX_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AUTOCODEX_PORT", "8765"))
 POLL_SECONDS = max(5, int(os.environ.get("AUTOCODEX_POLL_SECONDS", "15")))
+STATE_LOCK = threading.RLock()
 
 
 def https_context() -> ssl.SSLContext:
@@ -363,7 +364,7 @@ def codex_cli_status_probe(configured_path: str | None = None) -> dict[str, Any]
             process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
             process.stdin.flush()
 
-        send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "auto-codex-companion", "title": "Auto Codex Companion", "version": "0.2.0"}, "capabilities": {}}})
+        send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "auto-codex-companion", "title": "Auto Codex Companion", "version": "0.2.5"}, "capabilities": {}}})
         initialized = _wait_json_response(lines, 1, 6)
         if not initialized or initialized.get("error"):
             raise RuntimeError(str((initialized or {}).get("error") or "Codex app-server 初始化超时"))
@@ -557,7 +558,8 @@ def current_official_usage_probe(configured_path: str | None = None) -> dict[str
 
 
 def read_app_state() -> dict[str, Any]:
-    value = read_json(STATE_FILE, {})
+    with STATE_LOCK:
+        value = read_json(STATE_FILE, {})
     if not isinstance(value, dict):
         return default_app_state()
     defaults = default_app_state()
@@ -571,12 +573,19 @@ def read_app_state() -> dict[str, Any]:
 
 
 def write_app_state(value: dict[str, Any]) -> None:
-    atomic_write_json(STATE_FILE, value)
+    with STATE_LOCK:
+        atomic_write_json(STATE_FILE, value)
 
 
 def default_app_state() -> dict[str, Any]:
     return {
         "schedules": [], "last_goal_statuses": {}, "events": [], "last_scan_at": None,
+        "monitor": {
+            "scheduler_started_at": None, "last_tick_at": None, "tick_count": 0,
+            "status_checked_at": None, "status_check_count": 0,
+            "official_checked_at": None, "official_next_check_at": None,
+            "official_check_count": 0, "official_last_status": "not_checked",
+        },
         "usage_config": {"enabled": False, "base_url": "", "path": "/v1/usage", "unit": "USD", "poll_minutes": 5},
         "usage_probe": {"status": "not_configured"},
         "official_usage": {"status": "not_checked"},
@@ -598,16 +607,24 @@ def default_app_state() -> dict[str, Any]:
 
 
 def get_goal_rows() -> list[dict[str, Any]]:
-    path = CODEX_HOME / "goals_1.sqlite"
+    goal_path = CODEX_HOME / "goals_1.sqlite"
     rows = db_rows(
-        path,
-        """SELECT g.thread_id, g.goal_id, g.objective, g.status, g.token_budget,
-                  g.tokens_used, g.time_used_seconds, g.created_at_ms, g.updated_at_ms,
-                  t.title, t.cwd, t.model, t.reasoning_effort, t.archived, t.updated_at_ms AS thread_updated_at_ms
-           FROM thread_goals g LEFT JOIN threads t ON t.id = g.thread_id
-           ORDER BY g.updated_at_ms DESC LIMIT 100""",
+        goal_path,
+        """SELECT thread_id, goal_id, objective, status, token_budget,
+                  tokens_used, time_used_seconds, created_at_ms, updated_at_ms
+           FROM thread_goals ORDER BY updated_at_ms DESC LIMIT 100""",
     )
+    # Goals and thread metadata live in separate SQLite databases. SQLite
+    # cannot join them unless one file is explicitly ATTACHed, so merge the
+    # two read-only result sets in Python instead of silently losing goals.
+    thread_rows = db_rows(
+        CODEX_HOME / "state_5.sqlite",
+        """SELECT id, title, cwd, model, reasoning_effort, archived,
+                  updated_at_ms AS thread_updated_at_ms FROM threads""",
+    )
+    thread_by_id = {str(row.get("id")): row for row in thread_rows}
     for row in rows:
+        row.update(thread_by_id.get(str(row.get("thread_id")), {}))
         row["updated_at"] = iso(row.get("updated_at_ms"))
         row["thread_updated_at"] = iso(row.get("thread_updated_at_ms"))
         row.pop("updated_at_ms", None)
@@ -616,13 +633,20 @@ def get_goal_rows() -> list[dict[str, Any]]:
 
 
 def get_thread_rows() -> list[dict[str, Any]]:
+    """Return user tasks, nesting Codex-spawned workers under their parent."""
     path = CODEX_HOME / "state_5.sqlite"
     rows = db_rows(
         path,
         """SELECT id, title, cwd, model, reasoning_effort, updated_at_ms,
-                  archived, tokens_used, source, git_branch
+                  archived, tokens_used, source, git_branch, agent_nickname,
+                  agent_role, agent_path
            FROM threads ORDER BY updated_at_ms DESC LIMIT 100""",
     )
+    parent_by_child = {
+        str(edge.get("child_thread_id")): str(edge.get("parent_thread_id"))
+        for edge in db_rows(path, "SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges")
+        if edge.get("child_thread_id") and edge.get("parent_thread_id")
+    }
     goal_by_thread = {r["thread_id"]: r for r in get_goal_rows()}
     for row in rows:
         goal = goal_by_thread.get(row["id"], {})
@@ -631,17 +655,50 @@ def get_thread_rows() -> list[dict[str, Any]]:
         row["token_budget"] = goal.get("token_budget")
         row["time_used_seconds"] = goal.get("time_used_seconds")
         row["updated_at"] = iso(row.pop("updated_at_ms", None))
-    return rows
+        parent_id = parent_by_child.get(str(row["id"]))
+        source = row.get("source")
+        is_subagent_source = False
+        if isinstance(source, str) and source.startswith("{"):
+            try:
+                subagent_source = json.loads(source).get("subagent") or {}
+                is_subagent_source = bool(subagent_source)
+                spawn = subagent_source.get("thread_spawn") or {}
+            except (TypeError, ValueError):
+                spawn = {}
+            parent_id = parent_id or spawn.get("parent_thread_id")
+            row["agent_nickname"] = row.get("agent_nickname") or spawn.get("agent_nickname")
+            row["agent_role"] = row.get("agent_role") or spawn.get("agent_role")
+            row["agent_path"] = row.get("agent_path") or spawn.get("agent_path")
+            row["agent_depth"] = spawn.get("depth")
+        row["is_subagent"] = bool(parent_id or is_subagent_source)
+        row["parent_thread_id"] = parent_id
+        row["subagents"] = []
+
+    by_id = {str(row["id"]): row for row in rows}
+    top_level: list[dict[str, Any]] = []
+    for row in rows:
+        parent = by_id.get(str(row.get("parent_thread_id") or ""))
+        if row.get("is_subagent"):
+            if parent is not None:
+                parent["subagents"].append(row)
+            continue
+        top_level.append(row)
+    for row in rows:
+        row["subagents"].sort(key=lambda item: parse_when(str(item.get("updated_at") or "")) or 0, reverse=True)
+        row["subagent_count"] = len(row["subagents"])
+    return top_level
 
 
-def get_project_rows() -> list[dict[str, Any]]:
+def get_project_rows(threads: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Group recent threads by working directory for a readable task view."""
     groups: dict[str, dict[str, Any]] = {}
-    for thread in get_thread_rows():
+    for thread in threads if threads is not None else get_thread_rows():
         cwd = str(thread.get("cwd") or "未指定工作区")
         group = groups.setdefault(cwd, {"id": cwd, "name": Path(cwd).name or cwd, "cwd": cwd, "threads": [], "tokens_used": 0, "active": 0, "limited": 0})
         group["threads"].append(thread)
-        group["tokens_used"] += max(0, int(thread.get("tokens_used") or 0))
+        group["tokens_used"] += max(0, int(thread.get("tokens_used") or 0)) + sum(
+            max(0, int(agent.get("tokens_used") or 0)) for agent in thread.get("subagents", [])
+        )
         if thread.get("goal_status") == "active":
             group["active"] += 1
         if thread.get("goal_status") == "usage_limited":
@@ -820,25 +877,28 @@ def enqueue(thread_id: str, message: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
-def restore_goal(thread_id: str, message: str) -> tuple[bool, str]:
-    """Restore an archived thread, then enqueue a continuation message.
+def restore_goal(thread_id: str, message: str = "", execution_mode: str = "auto") -> tuple[bool, str, str]:
+    """Restore a thread and continue it using native goal control when possible.
 
     The CLI owns the session database, so restoration is deliberately performed
-    through ``codex unarchive`` instead of editing SQLite directly.  The
-    continuation is queued only after a successful unarchive (or when the
-    thread was already active).
+    through ``codex unarchive`` instead of editing SQLite directly. Goal-backed
+    sessions receive the official ``/goal resume`` command; ordinary sessions
+    receive the configured continuation message.
     """
     thread_id = str(thread_id or "").strip()
     message = str(message or "").strip()
-    if not thread_id or not message:
-        return False, "thread_id 和 message 不能为空"
+    execution_mode = str(execution_mode or "auto").strip().lower()
+    if execution_mode not in {"auto", "goal", "message"}:
+        return False, "execution_mode 必须是 auto、goal 或 message", execution_mode
+    if not thread_id:
+        return False, "thread_id 不能为空", execution_mode
     row = next((item for item in get_thread_rows() if item.get("id") == thread_id), None)
     if row is None:
-        return False, "未找到这个线程，可能已不在最近线程列表中"
+        return False, "未找到这个线程，可能已不在最近线程列表中", execution_mode
     if row.get("archived"):
         command = codex_command()
         if not command:
-            return False, "未找到 codex CLI"
+            return False, "未找到 codex CLI", execution_mode
         try:
             completed = subprocess.run(
                 [command, "unarchive", thread_id],
@@ -847,10 +907,20 @@ def restore_goal(thread_id: str, message: str) -> tuple[bool, str]:
                 timeout=20,
             )
             if completed.returncode != 0:
-                return False, (completed.stderr or completed.stdout or "恢复线程失败").strip()[:500]
+                return False, (completed.stderr or completed.stdout or "恢复线程失败").strip()[:500], execution_mode
         except (OSError, subprocess.SubprocessError) as exc:
-            return False, str(exc)
-    return enqueue(thread_id, message)
+            return False, str(exc), execution_mode
+    goal = next((item for item in get_goal_rows() if item.get("thread_id") == thread_id), None)
+    resolved_mode = "goal" if execution_mode == "goal" or (execution_mode == "auto" and goal and goal.get("status") != "complete") else "message"
+    if resolved_mode == "goal":
+        if goal is None:
+            return False, "这个会话没有可恢复的目标", resolved_mode
+        ok, detail = enqueue(thread_id, "/goal resume")
+        return ok, detail, resolved_mode
+    if not message:
+        return False, "普通会话需要填写继续消息", resolved_mode
+    ok, detail = enqueue(thread_id, message)
+    return ok, detail, resolved_mode
 
 
 def classify_enqueue_error(detail: str) -> str:
@@ -950,12 +1020,21 @@ class Scheduler:
             self.stop_event.wait(wait_seconds)
 
     def tick(self) -> None:
-        with self.lock:
+        # Keep a scheduler tick atomic with API writes so a stale request
+        # snapshot cannot erase a completed quota/status check.
+        with STATE_LOCK, self.lock:
             app = read_app_state() or default_app_state()
             settings = app.get("settings") or {}
             current_ms = now_ms()
+            monitor = app.setdefault("monitor", {})
+            if not monitor.get("scheduler_started_at"):
+                monitor["scheduler_started_at"] = iso(current_ms)
+            monitor["last_tick_at"] = iso(current_ms)
+            monitor["tick_count"] = int(monitor.get("tick_count") or 0) + 1
             before = app.get("last_goal_statuses") or {}
             current_rows = get_goal_rows()
+            monitor["status_checked_at"] = iso(current_ms)
+            monitor["status_check_count"] = int(monitor.get("status_check_count") or 0) + 1
             current = {r["thread_id"]: r.get("status") for r in current_rows}
             recovered = {tid for tid, old in before.items() if old == "usage_limited" and current.get(tid) not in (None, "usage_limited")}
             old_probe = app.get("usage_probe") or {}
@@ -984,6 +1063,17 @@ class Scheduler:
                 if old_full and now_open:
                     app.setdefault("events", []).append({"at": iso(now_ms()), "kind": "official_usage_recovered", "message": "官方订阅额度窗口已恢复"})
                     recovered.add("__official__")
+                checked_ms = parse_when(str(new_official.get("checked_at") or "")) or current_ms
+                monitor["official_checked_at"] = iso(checked_ms)
+                monitor["official_check_count"] = int(monitor.get("official_check_count") or 0) + 1
+                monitor["official_last_status"] = str(new_official.get("status") or "unknown")
+                app.setdefault("events", []).append({
+                    "at": iso(checked_ms), "kind": "automatic_usage_check", "message": "后台自动检查官方额度",
+                    "ok": new_official.get("status") == "ok", "status": new_official.get("status"),
+                    "source": new_official.get("credential_source"),
+                })
+                official_checked = checked_ms
+            monitor["official_next_check_at"] = iso((official_checked or current_ms) + official_poll_ms)
             app["last_goal_statuses"] = current
             app["last_scan_at"] = current_ms
             if recovered:
@@ -1031,10 +1121,14 @@ class Scheduler:
                     schedule["blocked_reason"] = budget_reason
                     app.setdefault("events", []).append({"at": iso(current_ms), "kind": "budget_blocked", "schedule_id": schedule.get("id"), "message": f"{schedule.get('name', '计划')}：{budget_reason}"})
                     continue
-                ok, detail = enqueue(str(schedule.get("thread_id") or ""), str(schedule.get("message") or "继续之前的任务"))
+                ok, detail, execution_mode = restore_goal(
+                    str(schedule.get("thread_id") or ""),
+                    str(schedule.get("message") or "继续之前的任务"),
+                    str(schedule.get("execution_mode") or "auto"),
+                )
                 attempt_at = now_ms()
                 schedule["last_attempt_at"] = attempt_at
-                schedule["last_result"] = {"ok": ok, "detail": detail, "at": iso(attempt_at)}
+                schedule["last_result"] = {"ok": ok, "detail": detail, "at": iso(attempt_at), "execution_mode": execution_mode}
                 schedule["attempt_count"] = int(schedule.get("attempt_count") or 0) + 1
                 schedule["retry_pending"] = False
                 schedule["next_attempt_at"] = None
@@ -1083,7 +1177,8 @@ class Scheduler:
                     schedule["enabled"] = False
                 app.setdefault("events", []).append({
                     "at": iso(attempt_at), "kind": "schedule_run", "schedule_id": schedule.get("id"),
-                    "message": f"{schedule.get('name', '未命名')}：{'已加入队列' if ok else f'执行失败（{error_kind}）'}", "detail": detail,
+                    "message": f"{schedule.get('name', '未命名')}：{'目标恢复已加入队列' if ok and execution_mode == 'goal' else '消息已加入队列' if ok else f'执行失败（{error_kind}）'}", "detail": detail,
+                    "execution_mode": execution_mode,
                 })
                 if settings.get("notifications", True):
                     notification("Auto Codex Companion", f"{schedule.get('name', '计划')}：{'已加入队列' if ok else f'执行失败（{error_kind}）'}")
@@ -1115,7 +1210,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/overview":
             app = read_app_state() or default_app_state()
-            self.send_json({"inventory": inventory(), "quota": quota_snapshot(), "tokens": token_snapshot(), "official_usage": app.get("official_usage") or {"status": "not_checked"}, "usage_config": safe_usage_config(app.get("usage_config")), "usage_probe": app.get("usage_probe") or {"status": "not_checked"}, "settings": app.get("settings") or default_app_state()["settings"], "threads": get_thread_rows(), "projects": get_project_rows(), "schedules": app.get("schedules", []), "events": list(reversed(app.get("events", [])[-30:]))})
+            threads = get_thread_rows()
+            self.send_json({"inventory": inventory(), "quota": quota_snapshot(), "tokens": token_snapshot(), "official_usage": app.get("official_usage") or {"status": "not_checked"}, "usage_config": safe_usage_config(app.get("usage_config")), "usage_probe": app.get("usage_probe") or {"status": "not_checked"}, "settings": app.get("settings") or default_app_state()["settings"], "monitor": app.get("monitor") or default_app_state()["monitor"], "threads": threads, "projects": get_project_rows(threads), "schedules": app.get("schedules", []), "events": list(reversed(app.get("events", [])[-30:]))})
             return
         if parsed.path == "/api/threads":
             self.send_json({"threads": get_thread_rows()})
@@ -1158,6 +1254,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_POST(self) -> None:  # noqa: N802
+        # Treat each read/modify/write request as one state transaction. The
+        # lock is re-entrant because the state helpers also protect disk I/O.
+        with STATE_LOCK:
+            self._do_POST_locked()
+
+    def _do_POST_locked(self) -> None:
         parsed = urlparse(self.path)
         try:
             data = json.loads(payload(self).decode("utf-8"))
@@ -1171,10 +1273,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "kind 必须是 interval、at_time 或 quota_recovered"}, HTTPStatus.BAD_REQUEST); return
             thread_id = str(data.get("thread_id") or "").strip()
             message = str(data.get("message") or "").strip()
-            if not thread_id or not message:
-                self.send_json({"error": "thread_id 和 message 不能为空"}, HTTPStatus.BAD_REQUEST); return
+            execution_mode = str(data.get("execution_mode") or "auto").strip().lower()
+            if execution_mode not in {"auto", "goal", "message"}:
+                self.send_json({"error": "继续方式必须是 auto、goal 或 message"}, HTTPStatus.BAD_REQUEST); return
+            if not thread_id or (execution_mode == "message" and not message):
+                self.send_json({"error": "目标会话不能为空；消息模式必须填写继续消息"}, HTTPStatus.BAD_REQUEST); return
             if not any(str(row.get("id") or "") == thread_id for row in get_thread_rows()):
                 self.send_json({"error": "目标会话不存在或已不在最近会话列表"}, HTTPStatus.BAD_REQUEST); return
+            if execution_mode == "goal" and not any(str(row.get("thread_id") or "") == thread_id for row in get_goal_rows()):
+                self.send_json({"error": "选择的会话没有目标，不能使用继续目标模式"}, HTTPStatus.BAD_REQUEST); return
             try:
                 interval_minutes = max(1, int(data.get("interval_minutes") or 60)) if kind == "interval" else None
                 max_attempts = max(0, int(data.get("max_attempts") or 0))
@@ -1202,7 +1309,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "价格预算和单价必须大于 0"}, HTTPStatus.BAD_REQUEST); return
             item = {
                 "id": str(uuid.uuid4()), "name": str(data.get("name") or "未命名计划"), "kind": kind,
-                "thread_id": thread_id, "message": message, "enabled": bool(data.get("enabled", True)),
+                "thread_id": thread_id, "message": message, "execution_mode": execution_mode, "enabled": bool(data.get("enabled", True)),
                 "interval_minutes": interval_minutes, "run_at": run_at,
                 "token_budget": token_budget, "price_budget_usd": price_budget, "price_per_1k_tokens": price_per_1k,
                 "retry_on_network": bool(data.get("retry_on_network", True)), "retry_on_quota": bool(data.get("retry_on_quota", True)),
@@ -1240,17 +1347,18 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/goals/resume":
             thread_id = str(data.get("thread_id") or "").strip()
             message = str(data.get("message") or "继续之前的任务；先检查当前状态，再从上次停下的位置继续。").strip()
+            execution_mode = str(data.get("execution_mode") or "auto").strip().lower()
             row = next((item for item in get_thread_rows() if item.get("id") == thread_id), None)
             if row is None:
                 self.send_json({"error": "未找到这个线程，可能已不在最近线程列表中"}, HTTPStatus.NOT_FOUND); return
             was_archived = bool(row.get("archived"))
-            ok, detail = restore_goal(thread_id, message)
+            ok, detail, resolved_mode = restore_goal(thread_id, message, execution_mode)
             app.setdefault("events", []).append({
-                "at": iso(now_ms()), "kind": "goal_resume", "message": "恢复目标并加入队列" if ok else "恢复目标失败",
-                "detail": detail, "ok": ok, "thread_id": thread_id, "unarchived": was_archived,
+                "at": iso(now_ms()), "kind": "goal_resume", "message": "继续目标" if ok and resolved_mode == "goal" else "继续会话" if ok else "继续失败",
+                "detail": detail, "ok": ok, "thread_id": thread_id, "unarchived": was_archived, "execution_mode": resolved_mode,
             })
             app["events"] = app["events"][-100:]; write_app_state(app)
-            self.send_json({"ok": ok, "detail": detail, "unarchived": was_archived}, 200 if ok else 502); return
+            self.send_json({"ok": ok, "detail": detail, "unarchived": was_archived, "execution_mode": resolved_mode}, 200 if ok else 502); return
         if parsed.path == "/api/usage-config":
             base_url = str(data.get("base_url") or "").strip()
             path = str(data.get("path") or "/v1/usage").strip()

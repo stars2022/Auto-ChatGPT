@@ -211,15 +211,16 @@ h1, h2, h3, p { margin: 0; }
 .project-totals { display: flex; gap: 13px; color: var(--tertiary); font-size: 9px; }
 .thread-list { padding: 9px 0 15px; }
 .thread-row { min-height: 69px; padding: 0 22px; border: 0; border-radius: 9px; }
-.thread-top { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 15px; align-items: center; min-height: 67px; }
-.thread-summary-click { min-width: 0; display: block; padding: 9px 0; border: 0; color: inherit; background: transparent; text-align: left; }
+.thread-top { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 15px; align-items: center; min-height: 67px; overflow: hidden; }
+.thread-summary { min-width: 0; width: 100%; padding: 9px 0; overflow: hidden; color: inherit; text-align: left; }
 .thread-row.archived { opacity: .65; }
-.thread-title { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.thread-title { display: block; width: 100%; overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .thread-subline { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--tertiary); font-size: 9px; }
 .thread-subline span { white-space: nowrap; }
 .thread-actions { display: flex; align-items: center; gap: 6px; }
 .thread-open-hint { display: inline-block; margin-top: 6px; color: rgba(110,184,255,.72); font-size: 8px; font-style: normal; opacity: 0; transform: translateY(3px); transition: opacity .18s, transform .22s cubic-bezier(.2,.8,.2,1); }
 .thread-row:hover .thread-open-hint { opacity: 1; transform: translateY(0); }
+.subagent-chip { color: #8fc7ff; }
 .status-chip { padding: 3px 6px; border-radius: 5px; color: var(--secondary); background: rgba(255,255,255,.06); font-size: 8px; }
 .status-chip.active { color: #72e68d; background: rgba(48,209,88,.1); }
 .status-chip.usage_limited { color: #ffc35d; background: rgba(255,159,10,.1); }
@@ -346,20 +347,32 @@ summary { color: var(--secondary); font-size: 10px; }
 .budget-options { padding:0; border:0; }
 .budget-options summary { padding:6px 0; }
 .budget-options .form-grid { margin-top:10px; }
-.thread-focus-dialog { width: min(680px, calc(100vw - 54px)); max-height: min(680px, calc(100vh - 72px)); padding: 0; overflow: hidden; border: 1px solid rgba(104,181,255,.34); border-radius: 16px; color: var(--text); background: linear-gradient(145deg, rgba(38,43,53,.985), rgba(27,29,35,.99)); box-shadow: 0 42px 130px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.035) inset, 0 0 70px rgba(10,132,255,.1); }
+.thread-focus-dialog { width: min(680px, calc(100vw - 54px)); max-height: min(680px, calc(100vh - 72px)); padding: 0; overflow: hidden; border: 1px solid rgba(104,181,255,.34); border-radius: 0; color: var(--text); background: linear-gradient(145deg, rgba(38,43,53,.985), rgba(27,29,35,.99)); box-shadow: 0 42px 130px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.035) inset, 0 0 70px rgba(10,132,255,.1); }
 .thread-focus-dialog::backdrop { background: rgba(5,8,13,.7); backdrop-filter: blur(9px) saturate(.8); animation: focus-backdrop-in .28s ease-out; }
+.thread-focus-dialog.closing::backdrop { opacity: 0; transition: opacity .3s ease; }
 .thread-focus-shell { position: relative; padding: 26px; overflow: auto; max-height: min(680px, calc(100vh - 72px)); }
 .thread-focus-shell::before { position: absolute; inset: 0; content:""; pointer-events:none; background: radial-gradient(500px circle at 15% 0%, rgba(10,132,255,.13), transparent 52%); }
 .thread-focus-shell > * { position: relative; }
-.thread-focus-shell > header { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
-.thread-focus-shell h3 { max-width: 570px; margin-top:6px; font-size:24px; line-height:1.16; letter-spacing:-.035em; }
+.thread-focus-shell > header { display:grid; grid-template-columns:minmax(0,1fr) 36px; align-items:flex-start; gap:22px; }
+.thread-focus-shell > header > div { min-width:0; padding-right:8px; }
+.thread-focus-shell h3 { width:100%; max-width:100%; margin-top:6px; overflow:hidden; font-size:24px; line-height:1.16; letter-spacing:-.035em; text-overflow:ellipsis; white-space:nowrap; }
 .thread-focus-meta { display:flex; flex-wrap:wrap; align-items:center; gap:9px 13px; margin-top:18px; padding-bottom:18px; border-bottom:1px solid var(--border); color:var(--tertiary); font-size:9px; }
 .thread-focus-objective { margin-top:20px; padding:18px; border:1px solid rgba(91,170,255,.14); border-radius:11px; background:rgba(10,132,255,.055); }
-.thread-focus-objective span, .thread-focus-id > span { display:block; margin-bottom:7px; color:var(--tertiary); font-size:8px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; }
+.thread-focus-objective span, .thread-focus-id > span, .thread-focus-subagents header > span { display:block; margin-bottom:7px; color:var(--tertiary); font-size:8px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; }
 .thread-focus-objective p { color:var(--secondary); font-size:12px; line-height:1.65; }
 .thread-focus-id { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:10px; margin-top:16px; }
 .thread-focus-id > span { grid-column:1 / -1; margin:0; }
 .thread-focus-id code { min-width:0; overflow:hidden; color:var(--secondary); font:9px var(--mono); text-overflow:ellipsis; white-space:nowrap; }
+.thread-focus-subagents { margin-top:16px; padding:14px 18px; border:1px solid var(--border); border-radius:0; background:rgba(0,0,0,.1); }
+.thread-focus-subagents header { display:flex; align-items:center; justify-content:space-between; }
+.thread-focus-subagents header > span { margin:0; }
+.thread-focus-subagents header b { color:var(--tertiary); font-size:8px; }
+.subagent-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); }
+.subagent-row:last-child { border-bottom:0; }
+.subagent-dot { width:6px; height:6px; border-radius:50%; background:#64b5ff; box-shadow:0 0 10px rgba(70,164,255,.6); }
+.subagent-row strong, .subagent-row small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.subagent-row strong { color:var(--secondary); font-size:10px; }
+.subagent-row small, .subagent-row > span:last-child { margin-top:2px; color:var(--tertiary); font-size:8px; }
 .thread-focus-shell > footer { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:24px; padding-top:17px; border-top:1px solid var(--border); }
 .thread-focus-shell > footer > span { color:var(--tertiary); font:8px var(--mono); }
 .thread-focus-shell > footer > div { display:flex; gap:8px; }

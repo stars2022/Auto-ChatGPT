@@ -200,12 +200,41 @@ class AppLogicTests(unittest.TestCase):
         with patch.object(app, "get_thread_rows", return_value=[{"id": "thread-1", "archived": 1}]), \
              patch.object(app, "codex_command", return_value="/usr/local/bin/codex"), \
              patch.object(app.subprocess, "run", return_value=Completed()) as run, \
+             patch.object(app, "get_goal_rows", return_value=[]), \
              patch.object(app, "enqueue", return_value=(True, "queued")) as enqueue:
-            ok, detail = app.restore_goal("thread-1", "继续")
+            ok, detail, mode = app.restore_goal("thread-1", "继续")
         self.assertTrue(ok)
         self.assertEqual(detail, "queued")
+        self.assertEqual(mode, "message")
         run.assert_called_once_with(["/usr/local/bin/codex", "unarchive", "thread-1"], capture_output=True, text=True, timeout=20)
         enqueue.assert_called_once_with("thread-1", "继续")
+
+    def test_restore_goal_uses_native_goal_resume_command(self):
+        with patch.object(app, "get_thread_rows", return_value=[{"id": "thread-1", "archived": 0}]), \
+             patch.object(app, "get_goal_rows", return_value=[{"thread_id": "thread-1", "status": "paused"}]), \
+             patch.object(app, "enqueue", return_value=(True, "queued")) as enqueue:
+            ok, detail, mode = app.restore_goal("thread-1", "ignored", "auto")
+        self.assertTrue(ok)
+        self.assertEqual(detail, "queued")
+        self.assertEqual(mode, "goal")
+        enqueue.assert_called_once_with("thread-1", "/goal resume")
+
+    def test_goal_rows_merge_separate_goal_and_thread_databases(self):
+        goal = {
+            "thread_id": "thread-1", "goal_id": "goal-1", "objective": "完成项目",
+            "status": "usage_limited", "updated_at_ms": 1_800_000_000_000,
+        }
+        thread = {
+            "id": "thread-1", "title": "目标任务", "cwd": "/tmp/project",
+            "model": "gpt-test", "reasoning_effort": "high", "archived": 0,
+            "thread_updated_at_ms": 1_800_000_001_000,
+        }
+        with patch.object(app, "db_rows", side_effect=[[goal], [thread]]) as query:
+            rows = app.get_goal_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "usage_limited")
+        self.assertEqual(rows[0]["title"], "目标任务")
+        self.assertEqual(query.call_count, 2)
 
     def test_https_context_requires_certificate_verification(self):
         self.assertEqual(app.HTTPS_CONTEXT.verify_mode, app.ssl.CERT_REQUIRED)

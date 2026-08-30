@@ -106,15 +106,24 @@ function renderProjects() {
   const project = projects.find((item) => item.id === selectedProjectId);
   if (!project) { $('#project-detail').innerHTML = '<div class="empty-state"><div class="empty-icon">▦</div><h3>没有匹配的项目</h3><p>尝试更改搜索条件。</p></div>'; return; }
   const threads = project.threads || [];
-  $('#project-detail').innerHTML = `<header class="project-detail-header"><div><h2>${esc(project.name)}</h2><code title="${esc(project.cwd)}">${esc(project.cwd)}</code></div><div class="project-totals"><span>${project.thread_count} 个会话</span><span>${fmtTokens(project.tokens_used)} tokens</span></div></header><div class="thread-list">${threads.length ? threads.map((thread) => `<article class="thread-row ${thread.archived ? 'archived' : ''}" data-reactive-card data-thread-id="${esc(thread.id)}"><div class="thread-top"><button class="thread-summary-click" type="button" aria-label="打开 ${esc(thread.title || '会话')} 详情"><span class="thread-title" title="${esc(thread.title)}">${esc(thread.title || '未命名会话')}</span><span class="thread-subline"><span class="status-chip ${esc(thread.goal_status || '')}">${esc(statusLabel(thread.goal_status))}</span><span>${esc(thread.model || '默认模型')}</span><span>${fmtTokens(thread.tokens_used)} tokens</span><span>${esc(fmtTime(thread.updated_at))}</span>${thread.archived ? '<span>已归档</span>' : ''}</span><i class="thread-open-hint">查看详情&nbsp; ↗</i></button><div class="thread-actions"><button class="primary-button continue-thread" data-id="${esc(thread.id)}">继续</button><button class="secondary-button schedule-thread" data-id="${esc(thread.id)}">自动继续</button><button class="icon-button thread-more" data-id="${esc(thread.id)}">•••</button></div></div></article>`).join('') : '<div class="empty">项目中没有会话</div>'}</div>`;
-  document.querySelectorAll('.thread-summary-click').forEach((button) => button.onclick = () => openThreadDetail(button.closest('.thread-row').dataset.threadId, button.closest('.thread-row'), project));
-  document.querySelectorAll('.continue-thread').forEach((button) => button.onclick = () => openContinue(button.dataset.id));
-  document.querySelectorAll('.schedule-thread').forEach((button) => button.onclick = () => openSchedule(button.dataset.id, button));
-  document.querySelectorAll('.thread-more').forEach((button) => button.onclick = (event) => openThreadMenu(event, button.dataset.id));
+  $('#project-detail').innerHTML = `<header class="project-detail-header"><div><h2>${esc(project.name)}</h2><code title="${esc(project.cwd)}">${esc(project.cwd)}</code></div><div class="project-totals"><span>${project.thread_count} 个会话</span><span>${fmtTokens(project.tokens_used)} tokens</span></div></header><div class="thread-list">${threads.length ? threads.map((thread) => `<article class="thread-row ${thread.archived ? 'archived' : ''}" data-reactive-card data-thread-id="${esc(thread.id)}" tabindex="0" role="button" aria-label="打开 ${esc(thread.title || '会话')} 详情"><div class="thread-top"><div class="thread-summary"><span class="thread-title" title="${esc(thread.title)}">${esc(thread.title || '未命名会话')}</span><span class="thread-subline"><span class="status-chip ${esc(thread.goal_status || '')}">${esc(statusLabel(thread.goal_status))}</span><span>${esc(thread.model || '默认模型')}</span><span>${fmtTokens(thread.tokens_used)} tokens</span><span>${esc(fmtTime(thread.updated_at))}</span>${thread.subagent_count ? `<span class="subagent-chip">${thread.subagent_count} 个 subagent</span>` : ''}${thread.archived ? '<span>已归档</span>' : ''}</span><i class="thread-open-hint">查看详情&nbsp; ↗</i></div><div class="thread-actions"><button class="secondary-button detail-thread" data-id="${esc(thread.id)}">详情</button><button class="primary-button continue-thread" data-id="${esc(thread.id)}">${thread.goal_status && thread.goal_status !== 'complete' ? '继续目标' : '继续'}</button><button class="secondary-button schedule-thread" data-id="${esc(thread.id)}">自动继续</button><button class="icon-button thread-more" data-id="${esc(thread.id)}">•••</button></div></div></article>`).join('') : '<div class="empty">项目中没有会话</div>'}</div>`;
+  document.querySelectorAll('.thread-row').forEach((row) => {
+    const open = () => openThreadDetail(row.dataset.threadId, row, project);
+    row.onclick = (event) => { if (!event.target.closest('.thread-actions')) open(); };
+    row.onkeydown = (event) => { if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest('.thread-actions')) { event.preventDefault(); open(); } };
+  });
+  document.querySelectorAll('.detail-thread').forEach((button) => button.onclick = (event) => { event.stopPropagation(); openThreadDetail(button.dataset.id, button.closest('.thread-row'), project); });
+  document.querySelectorAll('.continue-thread').forEach((button) => button.onclick = (event) => { event.stopPropagation(); openContinue(button.dataset.id); });
+  document.querySelectorAll('.schedule-thread').forEach((button) => button.onclick = (event) => { event.stopPropagation(); openSchedule(button.dataset.id, button); });
+  document.querySelectorAll('.thread-more').forEach((button) => button.onclick = (event) => { event.stopPropagation(); openThreadMenu(event, button.dataset.id); });
 }
 
 function renderQuota() {
   const usage = overview.official_usage || {};
+  const monitor = overview.monitor || {};
+  $('#quota-monitor').textContent = monitor.official_checked_at
+    ? `自动检查每 ${overview.settings?.official_poll_minutes || 5} 分钟 · 最近 ${fmtTime(monitor.official_checked_at)} · 下次 ${fmtTime(monitor.official_next_check_at)}`
+    : '自动额度检查尚未启动';
   const source = sourceState();
   const windows = usage.windows || [];
   $('#overview-source-detail').textContent = source.detail;
@@ -171,6 +180,12 @@ function scheduleTriggerLabel(item) {
   return `指定时间 ${fmtTime(item.run_at)}`;
 }
 
+function scheduleExecutionLabel(item) {
+  if (item.execution_mode === 'goal') return '继续目标';
+  if (item.execution_mode === 'message') return '发送消息';
+  return '目标优先';
+}
+
 function scheduleState(item) {
   if (item.completed_at) return { label:'已完成', tone:'good' };
   if (item.waiting_for_quota) return { label:'等待额度', tone:'warn' };
@@ -182,9 +197,19 @@ function scheduleState(item) {
 
 function renderTasks() {
   const schedules = overview.schedules || [];
+  const monitor = overview.monitor || {};
+  $('#scheduler-monitor').textContent = monitor.status_checked_at
+    ? `状态每 ${overview.settings?.poll_seconds || 15} 秒 · 最近 ${fmtTime(monitor.status_checked_at)} · 已检查 ${monitor.status_check_count || 0} 次`
+    : '后台状态检查尚未启动';
   const stats = [['启用中', schedules.filter((item) => item.enabled).length], ['等待额度', schedules.filter((item) => item.waiting_for_quota).length], ['等待重试', schedules.filter((item) => item.retry_pending).length], ['成功执行', schedules.reduce((sum, item) => sum + Number(item.run_count || 0), 0)]];
   $('#task-stats').innerHTML = stats.map(([label, value]) => `<div class="task-stat"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join('');
-  $('#schedule-list').innerHTML = schedules.length ? schedules.map((item) => { const state = scheduleState(item); const attempts = Number(item.attempt_count ?? item.run_count ?? 0); const stateDetail = item.waiting_for_quota ? '额度恢复后立即重试' : item.retry_pending && item.next_attempt_at ? `下次重试 ${fmtTime(item.next_attempt_at)}` : item.blocked_reason || ''; return `<div class="schedule-item"><div class="schedule-main"><div class="schedule-title">${esc(item.name)}<span class="badge ${state.tone}">${state.label}</span></div><div class="schedule-meta">${esc(scheduleTriggerLabel(item))} · 成功 ${item.run_count || 0} 次 · 尝试 ${attempts} 次${stateDetail ? ` · ${esc(stateDetail)}` : ''}</div></div><div class="schedule-actions"><button class="mini-button toggle-schedule" data-id="${esc(item.id)}" data-enabled="${!item.enabled}">${item.enabled ? '暂停' : item.completed_at ? '重新运行' : '启用'}</button><button class="mini-button delete-schedule" data-id="${esc(item.id)}">删除</button></div></div>`; }).join('') : '<div class="empty">还没有自动任务</div>';
+  $('#schedule-list').innerHTML = schedules.length ? schedules.map((item) => {
+    const state = scheduleState(item);
+    const attempts = Number(item.attempt_count ?? item.run_count ?? 0);
+    const runSummary = attempts ? `成功 ${item.run_count || 0} 次 · 尝试 ${attempts} 次` : '尚未触发';
+    const stateDetail = item.waiting_for_quota ? '额度恢复后立即重试' : item.retry_pending && item.next_attempt_at ? `下次重试 ${fmtTime(item.next_attempt_at)}` : item.kind === 'quota_recovered' && item.enabled && !attempts ? '等待下一次额度恢复' : item.blocked_reason || '';
+    return `<div class="schedule-item"><div class="schedule-main"><div class="schedule-title">${esc(item.name)}<span class="badge ${state.tone}">${state.label}</span></div><div class="schedule-meta">${esc(scheduleTriggerLabel(item))} · ${esc(scheduleExecutionLabel(item))} · ${runSummary}${stateDetail ? ` · ${esc(stateDetail)}` : ''}</div></div><div class="schedule-actions"><button class="mini-button toggle-schedule" data-id="${esc(item.id)}" data-enabled="${!item.enabled}">${item.enabled ? '暂停' : item.completed_at ? '重新运行' : '启用'}</button><button class="mini-button delete-schedule" data-id="${esc(item.id)}">删除</button></div></div>`;
+  }).join('') : '<div class="empty">还没有自动任务</div>';
   document.querySelectorAll('.toggle-schedule').forEach((button) => button.onclick = async () => { try { await api('/api/schedules/toggle', { method:'POST', body:JSON.stringify({ id:button.dataset.id, enabled:button.dataset.enabled === 'true' }) }); toast('任务状态已更新'); await load(); } catch (error) { toast(error.message); } });
   document.querySelectorAll('.delete-schedule').forEach((button) => button.onclick = async () => { if (!await confirmDelete()) return; try { await api('/api/schedules/delete', { method:'POST', body:JSON.stringify({ id:button.dataset.id }) }); toast('自动任务已删除'); await load(); } catch (error) { toast(error.message); } });
 }
@@ -234,9 +259,22 @@ function renderInventory() {
 function renderAll() { renderMetrics(); renderHero(); renderOverviewLists(); renderProjects(); renderQuota(); renderTasks(); renderUsageConfig(); renderSettings(); renderEvents(); renderInventory(); }
 async function load() { try { overview = await api('/api/overview'); renderAll(); } catch (error) { $('#last-sync').textContent = '连接失败'; toast(error.message); } }
 
-function threadById(id) { return (overview?.threads || []).find((thread) => thread.id === id); }
+function threadById(id) {
+  const pending = [...(overview?.threads || []), ...(overview?.projects || []).flatMap((project) => project.threads || [])];
+  const seen = new Set();
+  while (pending.length) {
+    const thread = pending.shift();
+    if (!thread || seen.has(thread.id)) continue;
+    if (thread.id === id) return thread;
+    seen.add(thread.id);
+    pending.push(...(thread.subagents || []));
+  }
+  return undefined;
+}
 function showDialogFrom(dialog, origin) {
   const sourceRect = origin?.getBoundingClientRect ? origin.getBoundingClientRect() : origin;
+  dialog._revealOrigin = origin?.getBoundingClientRect ? origin : null;
+  dialog._revealRect = sourceRect ? { left:sourceRect.left, top:sourceRect.top, width:sourceRect.width, height:sourceRect.height } : null;
   dialog.showModal();
   const targetRect = dialog.getBoundingClientRect();
   if (!sourceRect?.width || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -245,9 +283,32 @@ function showDialogFrom(dialog, origin) {
   const sx = Math.max(.12, Math.min(1, sourceRect.width / targetRect.width));
   const sy = Math.max(.08, Math.min(1, sourceRect.height / targetRect.height));
   dialog.animate([
-    { opacity:0, transform:`translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, filter:'brightness(1.35)' },
+    { opacity:0, transform:`translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, filter:'brightness(1.35)', borderRadius:'0px' },
     { opacity:1, transform:'translate(0, 0) scale(1)', filter:'brightness(1)' },
-  ], { duration:380, easing:'cubic-bezier(.16,1,.3,1)' });
+  ], { duration:420, easing:'cubic-bezier(.16,1,.3,1)' });
+}
+async function closeThreadDetail() {
+  const dialog = $('#thread-detail-dialog');
+  if (!dialog.open || dialog._closing) return;
+  dialog._closing = true;
+  const targetRect = dialog.getBoundingClientRect();
+  const liveOrigin = dialog._revealOrigin?.isConnected ? dialog._revealOrigin.getBoundingClientRect() : null;
+  const sourceRect = liveOrigin?.width ? liveOrigin : dialog._revealRect;
+  if (sourceRect?.width && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const dx = sourceRect.left + sourceRect.width / 2 - (targetRect.left + targetRect.width / 2);
+    const dy = sourceRect.top + sourceRect.height / 2 - (targetRect.top + targetRect.height / 2);
+    const sx = Math.max(.12, Math.min(1, sourceRect.width / targetRect.width));
+    const sy = Math.max(.08, Math.min(1, sourceRect.height / targetRect.height));
+    dialog.classList.add('closing');
+    const animation = dialog.animate([
+      { opacity:1, transform:'translate(0, 0) scale(1)', filter:'brightness(1)' },
+      { opacity:0, transform:`translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, filter:'brightness(1.25)', borderRadius:'0px' },
+    ], { duration:300, easing:'cubic-bezier(.4,0,.2,1)' });
+    await animation.finished.catch(() => {});
+  }
+  dialog.close();
+  dialog.classList.remove('closing');
+  dialog._closing = false;
 }
 function openThreadDetail(threadId, origin, project) {
   const thread = threadById(threadId);
@@ -258,10 +319,33 @@ function openThreadDetail(threadId, origin, project) {
   $('#thread-detail-title').textContent = thread.title || '未命名会话';
   $('#thread-detail-meta').innerHTML = `<span class="status-chip ${esc(thread.goal_status || '')}">${esc(statusLabel(thread.goal_status))}</span><span>${esc(thread.model || '默认模型')}</span><span>${fmtTokens(thread.tokens_used)} tokens</span><span>更新于 ${esc(fmtTime(thread.updated_at))}</span>${thread.archived ? '<span>已归档</span>' : ''}`;
   $('#thread-detail-objective').textContent = thread.objective || '这个会话没有设置持续目标。';
+  const agents = thread.subagents || [];
+  $('#thread-detail-subagents').classList.toggle('hidden', !agents.length);
+  $('#thread-detail-subagent-count').textContent = agents.length ? `${agents.length} 个` : '';
+  $('#thread-detail-subagent-list').innerHTML = agents.map((agent) => `<div class="subagent-row"><span class="subagent-dot"></span><span><strong>${esc(agent.agent_nickname || agent.agent_path || 'Subagent')}</strong><small>${esc(agent.agent_path || agent.agent_role || '协作任务')}</small></span><span>${fmtTokens(agent.tokens_used)} tokens</span></div>`).join('');
   $('#thread-detail-id').textContent = thread.id;
+  $('#detail-continue').textContent = thread.goal_status && thread.goal_status !== 'complete' ? '继续目标' : '继续会话';
   showDialogFrom(dialog, origin);
 }
-function openContinue(threadId) { closeMenus(); const thread = threadById(threadId); const dialog = $('#continue-dialog'); dialog.querySelector('[name="thread_id"]').value = threadId; $('#continue-title').textContent = thread?.title || '发送后续消息'; dialog.showModal(); dialog.querySelector('textarea').focus(); }
+function syncContinueForm() {
+  const form = $('#continue-form');
+  const isMessage = form.execution_mode.value === 'message';
+  $('#continue-message-field').classList.toggle('hidden', !isMessage);
+  form.message.required = isMessage;
+  $('#continue-submit').textContent = form.execution_mode.value === 'goal' ? '继续目标' : '继续';
+}
+function openContinue(threadId) {
+  closeMenus();
+  const thread = threadById(threadId);
+  const dialog = $('#continue-dialog');
+  const form = $('#continue-form');
+  form.querySelector('[name="thread_id"]').value = threadId;
+  form.execution_mode.value = thread?.goal_status && thread.goal_status !== 'complete' ? 'goal' : 'message';
+  $('#continue-title').textContent = thread?.title || '继续会话';
+  syncContinueForm();
+  dialog.showModal();
+  (form.execution_mode.value === 'message' ? form.message : form.execution_mode).focus();
+}
 
 let pickerSelectedDate = new Date();
 let pickerVisibleMonth = new Date(pickerSelectedDate.getFullYear(), pickerSelectedDate.getMonth(), 1);
@@ -304,10 +388,15 @@ function openDateTimePicker() {
 function syncScheduleForm() {
   const form = $('#schedule-form');
   const kind = form.kind.value;
+  const target = threadById(form.thread_id.value);
+  const targetHasGoal = Boolean(target?.goal_status && target.goal_status !== 'complete');
+  const usesMessage = form.execution_mode.value === 'message' || (form.execution_mode.value === 'auto' && !targetHasGoal);
   $('#interval-field').classList.toggle('hidden', kind !== 'interval');
   $('#time-field').classList.toggle('hidden', kind !== 'at_time');
+  $('#schedule-message-field').classList.toggle('hidden', !usesMessage);
   form.interval_minutes.required = kind === 'interval';
   form.run_at.required = kind === 'at_time';
+  form.message.required = usesMessage;
   $('#network-retry-field').classList.toggle('hidden', !form.retry_on_network.checked);
 }
 
@@ -322,6 +411,7 @@ function updateScheduleThreads(preferredThreadId = '') {
   if (!threads.length) return;
   const preferred = preferredThreadId && threads.some((thread) => thread.id === preferredThreadId);
   select.value = preferred ? preferredThreadId : threads[0].id;
+  syncScheduleForm();
 }
 
 function openSchedule(threadId = '', origin = null) {
@@ -369,10 +459,11 @@ window.autoCodex?.onMenuAction?.((action) => {
   if (action === 'new-task') return overview ? openSchedule('', $('#top-new-task')) : toast('数据仍在加载，请稍后再试');
   if (action === 'refresh') return load();
 });
-document.querySelectorAll('[data-close-dialog]').forEach((button) => button.onclick = () => document.getElementById(button.dataset.closeDialog).close());
-$('#thread-detail-dialog').onclick = (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); };
-$('#detail-continue').onclick = () => { const dialog = $('#thread-detail-dialog'); const id = dialog.dataset.threadId; dialog.close(); openContinue(id); };
-$('#detail-schedule').onclick = (event) => { const dialog = $('#thread-detail-dialog'); const id = dialog.dataset.threadId; const origin = event.currentTarget.getBoundingClientRect(); dialog.close(); openSchedule(id, origin); };
+document.querySelectorAll('[data-close-dialog]').forEach((button) => button.onclick = () => button.dataset.closeDialog === 'thread-detail-dialog' ? closeThreadDetail() : document.getElementById(button.dataset.closeDialog).close());
+$('#thread-detail-dialog').onclick = (event) => { if (event.target === event.currentTarget) closeThreadDetail(); };
+$('#thread-detail-dialog').oncancel = (event) => { event.preventDefault(); closeThreadDetail(); };
+$('#detail-continue').onclick = async () => { const dialog = $('#thread-detail-dialog'); const id = dialog.dataset.threadId; await closeThreadDetail(); openContinue(id); };
+$('#detail-schedule').onclick = async (event) => { const dialog = $('#thread-detail-dialog'); const id = dialog.dataset.threadId; const origin = event.currentTarget.getBoundingClientRect(); await closeThreadDetail(); openSchedule(id, origin); };
 $('#copy-detail-thread-id').onclick = () => { const id = $('#thread-detail-dialog').dataset.threadId; navigator.clipboard?.writeText(id).then(() => toast('会话 ID 已复制')).catch(() => toast(id)); };
 // Hover feedback is global; press feedback is intentionally narrower below.
 // All visible surfaces can show the moving edge highlight, while only elements
@@ -460,10 +551,13 @@ $('#top-new-task').onclick = (event) => openSchedule('', event.currentTarget);
 $('#new-schedule').onclick = (event) => openSchedule('', event.currentTarget);
 $('#hero-check-quota').onclick = () => { switchTab('quota'); $('#cli-status-check').click(); };
 
-$('#continue-form').onsubmit = async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target).entries()); try { const result = await api('/api/goals/resume', { method:'POST', body:JSON.stringify(data) }); $('#continue-dialog').close(); toast(result.unarchived ? '会话已取消归档并继续' : '消息已加入会话队列'); await load(); } catch (error) { toast(`继续失败：${error.message}`); } };
+$('#continue-execution-mode').onchange = syncContinueForm;
+$('#continue-form').onsubmit = async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target).entries()); try { const result = await api('/api/goals/resume', { method:'POST', body:JSON.stringify(data) }); $('#continue-dialog').close(); toast(result.execution_mode === 'goal' ? '目标恢复命令已加入队列' : result.unarchived ? '会话已取消归档并继续' : '消息已加入会话队列'); await load(); } catch (error) { toast(`继续失败：${error.message}`); } };
 
 $('#schedule-kind').onchange = syncScheduleForm;
 $('#schedule-project').onchange = () => updateScheduleThreads();
+$('#thread-select').onchange = syncScheduleForm;
+$('#schedule-execution-mode').onchange = syncScheduleForm;
 $('#retry-on-network').onchange = syncScheduleForm;
 $('#datetime-hour').innerHTML = Array.from({ length:24 }, (_, hour) => `<option value="${hour}">${String(hour).padStart(2, '0')}</option>`).join('');
 $('#datetime-minute').innerHTML = Array.from({ length:60 }, (_, minute) => `<option value="${minute}">${String(minute).padStart(2, '0')}</option>`).join('');
