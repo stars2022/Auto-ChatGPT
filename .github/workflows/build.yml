@@ -15,17 +15,13 @@ jobs:
             arch: arm64
             build_command: npm run dist:mac -- --arm64
             artifact_name: auto-codex-companion-mac-arm64
-            artifacts: |
-              dist/*.dmg
-              dist/*.zip
+            artifacts: dist/*.dmg
           - os: macos-15-intel
             target: mac
             arch: x64
             build_command: npm run dist:mac -- --x64
             artifact_name: auto-codex-companion-mac-x64
-            artifacts: |
-              dist/*.dmg
-              dist/*.zip
+            artifacts: dist/*.dmg
           - os: windows-latest
             target: win
             arch: x64

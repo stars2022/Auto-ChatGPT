@@ -41,8 +41,8 @@ python3 launcher.py stop
 构建安装包：
 
 ```bash
-npm run dist:mac -- --arm64  # macOS Apple Silicon .dmg + .zip
-npm run dist:mac -- --x64    # macOS Intel/AMD64 .dmg + .zip
+npm run dist:mac -- --arm64  # macOS Apple Silicon .dmg
+npm run dist:mac -- --x64    # macOS Intel/AMD64 .dmg
 npm run dist:win     # Windows x64 NSIS 安装程序
 npm run dist:linux   # x64 AppImage + .deb
 ```
