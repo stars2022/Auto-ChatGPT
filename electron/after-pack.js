@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 /** Copy a native PyInstaller backend into the packaged app when CI produced one. */
 exports.default = async function afterPack(context) {
@@ -20,4 +21,11 @@ exports.default = async function afterPack(context) {
   fs.copyFileSync(source, destination);
   if (platform !== 'win32') fs.chmodSync(destination, 0o755);
   console.log(`[afterPack] bundled native backend ${destination}`);
+  if (platform === 'darwin') {
+    // Downloaded Electron files can inherit com.apple.provenance/Finder
+    // metadata. codesign rejects those extended attributes, so strip them
+    // from this disposable build output before signing.
+    const cleanup = spawnSync('xattr', ['-cr', context.appOutDir], { stdio: 'inherit' });
+    if (cleanup.status !== 0) throw new Error('Unable to clear macOS build metadata before signing');
+  }
 };

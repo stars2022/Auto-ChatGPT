@@ -25,14 +25,14 @@
     </aside>
 
     <section class="workspace">
-      <header class="toolbar"><div><h1 id="page-title">概览</h1><p id="page-subtitle">查看任务与用量状态</p></div><div class="toolbar-actions"><span id="last-sync">正在连接…</span><button class="icon-button" id="refresh" title="刷新">↻</button><button class="primary-button" id="top-new-task">新建自动任务</button></div></header>
+      <header class="toolbar"><div><h1 id="page-title">概览</h1></div><div class="toolbar-actions"><span id="last-sync">正在连接…</span><button class="icon-button" id="refresh" title="刷新">↻</button><button class="primary-button" id="top-new-task">新建自动任务</button></div></header>
       <main class="content">
         <section class="tab-panel active" data-panel="overview">
-          <article class="hero-card"><div class="hero-copy"><span class="live-label"><i></i>后台监测中</span><h2 id="hero-title">正在读取本机状态…</h2><p id="hero-copy">扫描项目、会话和额度来源。</p><div class="button-row"><button class="primary-button" data-go-tab="projects">查看项目</button><button class="secondary-button" id="hero-check-quota">刷新用量</button></div></div><div class="usage-ring" id="usage-ring"><div><strong id="ring-value">—</strong><span>5 小时已用</span></div></div></article>
+          <article class="hero-card"><div class="hero-copy"><span class="live-label"><i></i>后台监测中</span><h2 id="hero-title">正在读取本机状态…</h2><p id="hero-copy"></p><div class="button-row"><button class="primary-button" data-go-tab="projects">查看项目</button><button class="secondary-button" id="hero-check-quota">刷新用量</button></div></div><div class="usage-ring" id="usage-ring"><div><strong id="ring-value">—</strong><span>5 小时已用</span></div></div></article>
           <div class="metric-grid" id="metrics"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
           <div class="dashboard-grid">
             <article class="surface-card"><header class="card-header"><div><h3>最近项目</h3></div><button class="link-button" data-go-tab="projects">查看全部</button></header><div id="recent-projects" class="compact-list"><div class="empty">加载中…</div></div></article>
-            <article class="surface-card"><header class="card-header"><div><h3>用量窗口</h3><p id="overview-source-detail">正在检测 Codex CLI</p></div><span id="overview-quota-pill" class="badge neutral">检测中</span></header><div id="overview-quota-bars" class="quota-bars"></div><div class="provider-summary" id="overview-provider-summary"><div class="provider-summary-head"><strong>第三方提供商</strong><span id="overview-provider-pill" class="badge neutral">未配置</span></div><p id="overview-provider-detail">可在用量页配置兼容的余额接口。</p></div><button class="secondary-button full" data-go-tab="quota">查看用量详情</button></article>
+            <article class="surface-card"><header class="card-header"><div><h3>用量窗口</h3><p id="overview-source-detail">正在检测 Codex CLI</p></div><span id="overview-quota-pill" class="badge neutral">检测中</span></header><div id="overview-quota-bars" class="quota-bars"></div><div class="provider-summary" id="overview-provider-summary"><div class="provider-summary-head"><strong>第三方提供商</strong><span id="overview-provider-pill" class="badge neutral">未配置</span></div><p id="overview-provider-detail"></p></div><button class="secondary-button full" data-go-tab="quota">查看用量详情</button></article>
           </div>
           <article class="surface-card"><header class="card-header"><div><h3>正在进行</h3></div></header><div id="active-tasks" class="compact-list"><div class="empty">加载中…</div></div></article>
         </section>
@@ -40,14 +40,14 @@
         <section class="tab-panel full-height-panel" data-panel="projects">
           <div class="project-browser surface-card">
             <aside class="project-rail"><div class="rail-heading"><div><h3>项目</h3><span id="project-summary-count">0</span></div><label class="search-box"><span>⌕</span><input id="project-search" type="search" placeholder="搜索项目" /></label></div><div id="project-list" class="project-list"><div class="empty">加载中…</div></div></aside>
-            <section class="project-detail" id="project-detail"><div class="empty-state"><div class="empty-icon">▦</div><h3>选择一个项目</h3><p>会话会按工作目录归类显示。</p></div></section>
+            <section class="project-detail" id="project-detail"><div class="empty-state"><div class="empty-icon">▦</div><h3>选择一个项目</h3></div></section>
           </div>
         </section>
 
         <section class="tab-panel" data-panel="tasks">
           <div class="section-toolbar"><span></span><button class="primary-button" id="new-schedule">新建自动任务</button></div>
           <div class="task-stats" id="task-stats"></div>
-          <article class="surface-card"><header class="card-header"><div><h3>已配置任务</h3><p>网络失败自动退避，额度耗尽则等待恢复</p></div></header><div id="schedule-list" class="schedule-list"><div class="empty">还没有任务</div></div></article>
+          <article class="surface-card"><header class="card-header"><div><h3>已配置任务</h3></div></header><div id="schedule-list" class="schedule-list"><div class="empty">还没有任务</div></div></article>
         </section>
 
         <section class="tab-panel" data-panel="quota">
@@ -56,7 +56,7 @@
           <div id="quota-windows" class="window-grid"><div class="empty">刷新后显示额度窗口</div></div>
           <div class="source-grid">
             <article class="surface-card"><header class="card-header"><div><h3>官方订阅</h3><p id="official-auth-summary">检测本机 OAuth</p></div><span id="probe-pill" class="badge neutral">未检查</span></header><div id="official-result" class="result-box hidden"></div><button class="secondary-button" id="official-check">检查额度</button></article>
-            <article class="surface-card"><header class="card-header"><div><h3>第三方提供商</h3><p>读取兼容的余额接口</p></div><span id="usage-pill" class="badge neutral">未配置</span></header><form id="usage-form" class="form-stack"><div class="form-grid"><label>Base URL<input name="base_url" placeholder="https://example.com" /></label><label>路径<input name="path" value="/v1/usage" /></label><label>API Key<input name="api_key" type="password" placeholder="仅保存在本机" /></label><label>轮询分钟<input name="poll_minutes" type="number" min="1" value="5" /></label></div><input name="unit" type="hidden" value="USD" /><div class="button-row"><button class="primary-button" type="submit">保存</button><button class="secondary-button" type="button" id="usage-check">测试连接</button></div></form><div id="usage-result" class="result-box hidden"></div></article>
+            <article class="surface-card"><header class="card-header"><div><h3>第三方提供商</h3></div><span id="usage-pill" class="badge neutral">未配置</span></header><form id="usage-form" class="form-stack"><div class="form-grid"><label>Base URL<input name="base_url" placeholder="https://example.com" /></label><label>路径<input name="path" value="/v1/usage" /></label><label>API Key<input name="api_key" type="password" placeholder="仅保存在本机" /></label><label>轮询分钟<input name="poll_minutes" type="number" min="1" value="5" /></label></div><input name="unit" type="hidden" value="USD" /><div class="button-row"><button class="primary-button" type="submit">保存</button><button class="secondary-button" type="button" id="usage-check">测试连接</button></div></form><div id="usage-result" class="result-box hidden"></div></article>
           </div>
         </section>
 
@@ -69,7 +69,7 @@
             <div class="settings-save"><button class="primary-button" type="submit">保存设置</button></div>
           </form>
           <article class="surface-card diagnostics"><header class="card-header"><div><h3>诊断信息</h3><p>只显示文件元数据和脱敏配置键</p></div></header><details><summary>可访问配置文件</summary><div id="inventory-list" class="inventory-list"></div></details><details><summary>配置键名</summary><div id="config-keys" class="config-keys"></div></details></article>
-          <article class="surface-card about-card"><header class="card-header"><div><h3>关于</h3><p>Auto Codex Companion · 本地优先的任务控制面板</p></div><span class="badge neutral">v0.2.0</span></header><details><summary>发现（不常用）</summary><p class="about-copy">这里保留扩展能力和实验性入口，不影响自动任务、额度监测与后台运行。需要诊断或查看本机状态时，可从上方诊断信息进入。</p></details></article>
+          <article class="surface-card about-card"><header class="card-header"><div><h3>关于</h3></div><span class="badge neutral">v0.2.1</span></header><details><summary>发现</summary><p class="about-copy">扩展与实验性入口。</p></details></article>
         </section>
       </main>
     </section>
@@ -89,11 +89,20 @@
   <dialog id="schedule-dialog" class="app-dialog schedule-dialog"><form method="dialog" id="schedule-form">
     <header><div><span class="dialog-kicker">自动任务</span><h3>安排自动继续</h3></div><button type="button" class="dialog-close" data-close-dialog="schedule-dialog">×</button></header>
     <div class="form-grid"><label>名称<input name="name" value="额度恢复后继续" required /></label><label>分组 / 项目<select name="project_id" id="schedule-project" required></select></label><label>目标对话<select name="thread_id" id="thread-select" required disabled></select></label></div>
-    <section class="form-section"><header><div><strong>触发条件</strong><small>三种方式互斥，只会采用当前选择的一种。</small></div></header><div class="form-grid trigger-grid"><label>触发方式<select name="kind" id="schedule-kind"><option value="quota_recovered">额度恢复后</option><option value="interval">固定间隔</option><option value="at_time">指定时间</option></select></label><label id="interval-field" class="hidden">间隔分钟<input name="interval_minutes" type="number" min="1" value="60" /></label><label id="time-field" class="hidden">执行时间<input name="run_at" type="datetime-local" /></label><p id="quota-trigger-help" class="field-help">检测到目标会话或官方额度窗口从受限恢复为可用后执行。</p></div></section>
-    <section class="form-section"><header><div><strong>失败处理</strong><small>重试状态优先于触发条件；暂停任务会清除等待状态。</small></div></header><div class="check-grid"><label><input name="retry_on_network" id="retry-on-network" type="checkbox" checked />网络失败自动重试</label><label><input name="retry_on_quota" type="checkbox" checked />额度耗尽后等待恢复</label></div><label id="network-retry-field">网络重试上限<input name="max_attempts" type="number" min="0" value="3" /><small>0 表示持续重试；超过上限后任务自动停用</small></label></section>
+    <section class="form-section"><header><div><strong>触发条件</strong></div></header><div class="form-grid trigger-grid"><label>触发方式<select name="kind" id="schedule-kind"><option value="quota_recovered">额度恢复后</option><option value="interval">固定间隔检查</option><option value="at_time">指定时间</option></select></label><label id="interval-field" class="hidden">检查间隔（分钟）<input name="interval_minutes" type="number" min="1" value="60" /></label><label id="time-field" class="hidden">执行时间<button type="button" class="picker-button" id="schedule-run-at-button"><span id="schedule-run-at-label">选择日期和时间</span><i>▦</i></button><input name="run_at" id="schedule-run-at" type="hidden" /></label></div></section>
+    <section class="form-section"><header><div><strong>失败处理</strong></div></header><div class="check-grid"><label><input name="retry_on_network" id="retry-on-network" type="checkbox" checked />网络失败自动重试</label><label><input name="retry_on_quota" type="checkbox" checked />额度耗尽后等待恢复</label></div><label id="network-retry-field">网络重试上限<input name="max_attempts" type="number" min="0" value="3" /><small>0 表示持续重试；超过上限后任务自动停用</small></label></section>
     <section class="form-section"><label>继续消息<textarea name="message" rows="4" required>继续之前的任务；先检查当前状态，再从上次停下的位置继续。</textarea></label><details class="budget-options"><summary>预算限制（可选）</summary><div class="form-grid"><label>Token 上限<input name="token_budget" type="number" min="1" placeholder="不限制" /></label><label>价格预算 USD<input name="price_budget_usd" type="number" min="0" step="0.01" placeholder="不限制" /></label><label>单价 / 1K tokens<input name="price_per_1k_tokens" type="number" min="0" step="0.0001" placeholder="与价格预算同时填写" /></label></div></details></section>
     <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="schedule-dialog">取消</button><button class="primary-button" type="submit">创建任务</button></div>
   </form></dialog>
+  <dialog id="datetime-dialog" class="app-dialog compact datetime-dialog">
+    <div class="datetime-picker">
+      <header><button type="button" class="icon-button" id="datetime-prev" aria-label="上个月">‹</button><h3 id="datetime-month"></h3><button type="button" class="icon-button" id="datetime-next" aria-label="下个月">›</button></header>
+      <div class="datetime-weekdays"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+      <div class="datetime-calendar" id="datetime-calendar"></div>
+      <div class="datetime-time"><label>小时<select id="datetime-hour"></select></label><label>分钟<select id="datetime-minute"></select></label></div>
+      <div class="dialog-actions"><button type="button" class="secondary-button" id="datetime-cancel">取消</button><button type="button" class="primary-button" id="datetime-confirm">确定</button></div>
+    </div>
+  </dialog>
   <dialog id="confirm-dialog" class="app-dialog compact"><form method="dialog"><header><div><span class="dialog-kicker">确认操作</span><h3 id="confirm-title">删除自动任务？</h3></div></header><p id="confirm-copy">这不会删除 Codex 会话。</p><div class="dialog-actions"><button value="cancel" class="secondary-button">取消</button><button value="confirm" class="danger-button">删除</button></div></form></dialog>
   <div id="toast" class="toast"></div>
   <script src="/static/app.js"></script>

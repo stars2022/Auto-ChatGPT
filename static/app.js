@@ -8,6 +8,8 @@ let contextThreadId = '';
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[char]));
 const fmtTime = (value) => { if (!value) return '—'; try { return new Intl.DateTimeFormat('zh-CN', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }).format(new Date(value)); } catch { return String(value); } };
 const fmtTokens = (value) => { const number = Number(value || 0); return number >= 1e6 ? `${(number / 1e6).toFixed(1)}M` : number >= 1e3 ? `${(number / 1e3).toFixed(1)}K` : number.toLocaleString(); };
+const localDateTimeValue = (date) => { const offset = date.getTimezoneOffset() * 60_000; return new Date(date.getTime() - offset).toISOString().slice(0, 16); };
+const parseLocalDateTime = (value) => { const parsed = value ? new Date(value) : new Date(NaN); return Number.isNaN(parsed.getTime()) ? null : parsed; };
 const statusLabel = (status) => ({ usage_limited:'额度受限', active:'运行中', blocked:'已阻塞', paused:'已暂停', complete:'已完成', budget_limited:'预算受限' }[status] || '普通会话');
 const api = async (path, options = {}) => { const response = await fetch(path, { headers:{ 'Content-Type':'application/json' }, ...options }); const data = await response.json(); if (!response.ok) throw new Error(data.error || data.detail || `HTTP ${response.status}`); return data; };
 const toast = (message) => { const element = $('#toast'); element.textContent = message; element.classList.add('show'); clearTimeout(element._timer); element._timer = setTimeout(() => element.classList.remove('show'), 2800); };
@@ -18,12 +20,10 @@ function switchTab(tab, updateUrl = true) {
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab));
   const copy = {
-    overview:['概览','查看任务与用量状态'], projects:['项目与会话','按工作目录查找并继续 Codex 会话'],
-    tasks:['自动任务','安排定时或额度恢复后的继续操作'], quota:['用量','查看 Codex CLI 状态与额度窗口'],
-    events:['活动','后台操作和检测记录'], settings:['设置','配置 CLI、扫描和通知'],
+    overview:'概览', projects:'项目与会话', tasks:'自动任务', quota:'用量',
+    events:'活动', settings:'设置',
   };
-  $('#page-title').textContent = copy[tab][0];
-  $('#page-subtitle').textContent = copy[tab][1];
+  $('#page-title').textContent = copy[tab];
   if (updateUrl) history.replaceState(null, '', `#${tab}`);
 }
 
@@ -32,25 +32,29 @@ function sourceState() {
   const provider = overview?.usage_probe || {};
   const providerConfig = overview?.usage_config || {};
   const auth = overview?.inventory?.auth || {};
-  if (usage.status === 'ok' && usage.credential_source === 'codex_cli') return { label:'Codex CLI', detail:'通过 CLI app-server 读取 /status 状态', tone:'good' };
-  if (usage.status === 'ok') return { label:'OAuth 回退', detail:'CLI 状态不可用，已通过本机 OAuth 读取', tone:'good' };
+  if (usage.status === 'ok' && usage.credential_source === 'codex_cli') return { label:'Codex CLI', detail:'已连接', tone:'good' };
+  if (usage.status === 'ok') return { label:'OAuth', detail:'已连接', tone:'good' };
   if (provider.status === 'ok') return { label:'第三方提供商', detail:`余额 ${provider.remaining ?? '—'} ${provider.unit || providerConfig.unit || ''} · ${fmtTime(provider.checked_at)} 更新`, tone:'good' };
   if (providerConfig.enabled && provider.status && !['not_checked', 'not_configured'].includes(provider.status)) return { label:'第三方提供商', detail:`用量检查失败：${provider.detail || provider.status}`, tone:'warn' };
-  if (auth.kind === 'oauth') return { label:'OAuth 已登录', detail:'等待下一次用量检查', tone:'warn' };
-  return { label:'本地状态', detail:'未连接可读取用量的来源', tone:'neutral' };
+  if (auth.kind === 'oauth') return { label:'OAuth', detail:'等待检查', tone:'warn' };
+  return { label:'本地状态', detail:'未连接', tone:'neutral' };
 }
 
 function renderMetrics() {
   const projects = overview.projects || [];
   const threads = overview.threads || [];
   const schedules = overview.schedules || [];
+  const projectTokens = projects.reduce((sum, item) => sum + Number(item.tokens_used || 0), 0);
+  const threadTokens = threads.reduce((sum, item) => sum + Number(item.tokens_used || 0), 0);
+  const limited = overview.quota?.usage_limited || 0;
+  const enabledSchedules = schedules.filter((item) => item.enabled).length;
   const values = [
-    ['项目', projects.length, '工作目录'],
-    ['会话', threads.length, '最近记录'],
-    ['进行中', threads.filter((item) => item.goal_status === 'active').length, `${overview.quota?.usage_limited || 0} 个额度受限`],
-    ['自动任务', schedules.filter((item) => item.enabled).length, `${schedules.length} 个已配置`],
+    ['项目', projects.length, projectTokens ? `${fmtTokens(projectTokens)} tokens` : ''],
+    ['会话', threads.length, threadTokens ? `${fmtTokens(threadTokens)} tokens` : ''],
+    ['进行中', threads.filter((item) => item.goal_status === 'active').length, limited ? `${limited} 个额度受限` : ''],
+    ['自动任务', enabledSchedules, schedules.length !== enabledSchedules ? `${schedules.length} 个总计` : ''],
   ];
-  $('#metrics').innerHTML = values.map(([label, value, detail]) => `<div class="metric"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(detail)}</small></div>`).join('');
+  $('#metrics').innerHTML = values.map(([label, value, detail]) => `<div class="metric"><span>${esc(label)}</span><strong>${esc(value)}</strong>${detail ? `<small>${esc(detail)}</small>` : ''}</div>`).join('');
   $('#project-count').textContent = projects.length;
   $('#project-summary-count').textContent = `${projects.length} 个项目`;
   $('#last-sync').textContent = `更新于 ${fmtTime(new Date())}`;
@@ -66,7 +70,7 @@ function renderHero() {
   const limited = overview.quota?.usage_limited || 0;
   const source = sourceState();
   $('#hero-title').textContent = limited ? `${limited} 个会话正在等待额度恢复` : active ? `${active} 个会话正在进行` : 'Codex 工作区已准备好';
-  $('#hero-copy').textContent = `${source.label} · ${source.detail}。会话已按 ${overview.projects?.length || 0} 个项目归类。`;
+  $('#hero-copy').textContent = `${source.label} · ${source.detail}`;
   const primary = overview.official_usage?.windows?.[0];
   const used = Math.max(0, Math.min(100, Number(primary?.used_percent || 0)));
   $('#usage-ring').style.setProperty('--usage', used);
@@ -124,7 +128,7 @@ function renderQuota() {
   $('#cli-summary').textContent = cli.found ? `${cli.version || 'Codex CLI'} · ${cli.source === 'manual' ? '手动路径' : '自动检测'}` : '没有在当前平台的常见位置找到 CLI';
   $('#cli-path').textContent = cli.path || '请在设置中指定目录';
   const auth = overview.inventory?.auth || {};
-  $('#official-auth-summary').textContent = auth.kind === 'oauth' ? `已检测到官方 OAuth；当前优先使用 Codex CLI，失败时自动回退。` : '未发现官方 OAuth，CLI 状态仍可能可用。';
+  $('#official-auth-summary').textContent = auth.kind === 'oauth' ? 'OAuth 已发现' : '未发现 OAuth';
   $('#probe-pill').className = `badge ${usage.status === 'ok' ? 'good' : usage.status && usage.status !== 'not_checked' ? 'warn' : 'neutral'}`;
   $('#probe-pill').textContent = usage.status === 'ok' ? source.label : '未检查';
   const result = $('#official-result');
@@ -141,7 +145,7 @@ function renderProviderSummary() {
   if (!config.enabled && !config.api_key_configured) {
     pill.className = 'badge neutral';
     pill.textContent = '未配置';
-    detail.textContent = '可在用量页配置兼容的余额接口。';
+    detail.textContent = '';
     return;
   }
   if (probe.status === 'ok') {
@@ -158,12 +162,12 @@ function renderProviderSummary() {
   }
   pill.className = 'badge warn';
   pill.textContent = '等待检查';
-  detail.textContent = '已配置，后台会按设定间隔刷新余额。';
+  detail.textContent = '';
 }
 
 function scheduleTriggerLabel(item) {
   if (item.kind === 'quota_recovered') return '额度恢复后';
-  if (item.kind === 'interval') return `每 ${item.interval_minutes} 分钟`;
+  if (item.kind === 'interval') return `每 ${item.interval_minutes} 分钟检查`;
   return `指定时间 ${fmtTime(item.run_at)}`;
 }
 
@@ -258,12 +262,50 @@ function openThreadDetail(threadId, origin, project) {
   showDialogFrom(dialog, origin);
 }
 function openContinue(threadId) { closeMenus(); const thread = threadById(threadId); const dialog = $('#continue-dialog'); dialog.querySelector('[name="thread_id"]').value = threadId; $('#continue-title').textContent = thread?.title || '发送后续消息'; dialog.showModal(); dialog.querySelector('textarea').focus(); }
+
+let pickerSelectedDate = new Date();
+let pickerVisibleMonth = new Date(pickerSelectedDate.getFullYear(), pickerSelectedDate.getMonth(), 1);
+function updateDateTimeLabel() {
+  const value = $('#schedule-run-at').value;
+  const date = parseLocalDateTime(value);
+  $('#schedule-run-at-label').textContent = date
+    ? new Intl.DateTimeFormat('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(date)
+    : '选择日期和时间';
+}
+function renderDateTimePicker() {
+  const year = pickerVisibleMonth.getFullYear();
+  const month = pickerVisibleMonth.getMonth();
+  $('#datetime-month').textContent = `${year} 年 ${month + 1} 月`;
+  const firstOffset = (new Date(year, month, 1).getDay() + 6) % 7;
+  const start = new Date(year, month, 1 - firstOffset);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const selectedKey = `${pickerSelectedDate.getFullYear()}-${pickerSelectedDate.getMonth()}-${pickerSelectedDate.getDate()}`;
+  $('#datetime-calendar').innerHTML = Array.from({ length:42 }, (_, index) => {
+    const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + index);
+    const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+    const classes = [date.getMonth() === month ? '' : 'outside', key === selectedKey ? 'selected' : ''].filter(Boolean).join(' ');
+    return `<button type="button" data-date="${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}" class="${classes}" ${date < today ? 'disabled' : ''}>${date.getDate()}</button>`;
+  }).join('');
+  $('#datetime-calendar').querySelectorAll('button:not([disabled])').forEach((button) => button.onclick = () => {
+    const [nextYear, nextMonth, nextDay] = button.dataset.date.split('-').map(Number);
+    pickerSelectedDate = new Date(nextYear, nextMonth - 1, nextDay, pickerSelectedDate.getHours(), pickerSelectedDate.getMinutes());
+    pickerVisibleMonth = new Date(nextYear, nextMonth - 1, 1);
+    renderDateTimePicker();
+  });
+  $('#datetime-hour').value = String(pickerSelectedDate.getHours());
+  $('#datetime-minute').value = String(pickerSelectedDate.getMinutes());
+}
+function openDateTimePicker() {
+  pickerSelectedDate = parseLocalDateTime($('#schedule-run-at').value) || new Date(Date.now() + 5 * 60_000);
+  pickerVisibleMonth = new Date(pickerSelectedDate.getFullYear(), pickerSelectedDate.getMonth(), 1);
+  renderDateTimePicker();
+  $('#datetime-dialog').showModal();
+}
 function syncScheduleForm() {
   const form = $('#schedule-form');
   const kind = form.kind.value;
   $('#interval-field').classList.toggle('hidden', kind !== 'interval');
   $('#time-field').classList.toggle('hidden', kind !== 'at_time');
-  $('#quota-trigger-help').classList.toggle('hidden', kind !== 'quota_recovered');
   form.interval_minutes.required = kind === 'interval';
   form.run_at.required = kind === 'at_time';
   $('#network-retry-field').classList.toggle('hidden', !form.retry_on_network.checked);
@@ -301,8 +343,8 @@ function openSchedule(threadId = '', origin = null) {
   if (!$('#thread-select').options.length) return toast('没有可用会话');
   const local = new Date(Date.now() + 5 * 60_000);
   local.setSeconds(0, 0);
-  form.run_at.min = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-  form.run_at.value = new Date(local.getTime() - local.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  form.run_at.value = localDateTimeValue(local);
+  updateDateTimeLabel();
   syncScheduleForm();
   showDialogFrom($('#schedule-dialog'), origin);
 }
@@ -336,9 +378,9 @@ $('#copy-detail-thread-id').onclick = () => { const id = $('#thread-detail-dialo
 // All visible surfaces can show the moving edge highlight, while only elements
 // that navigate/open content receive the press-depth transform.
 const reactiveCardSelector = '.sidebar, .surface-card, .metric, .window-card, .project-item, .thread-row, .compact-row, .schedule-item, .event, .context-menu button, .primary-button, .secondary-button, .danger-button, .icon-button, .mini-button, .nav-item, .brand, .service-state';
-const reactiveFieldSelector = 'input:not([type="checkbox"]):not([type="hidden"]), select, textarea';
+const reactiveFieldSelector = 'input:not([type="checkbox"]):not([type="hidden"]), select, textarea, .picker-button';
 const tiltSurfaceSelector = '.project-item, .open-project, .thread-row';
-const lightOnlySelector = 'button';
+const lightOnlySelector = 'button:not(.picker-button)';
 const edgeReactiveSelector = `${reactiveCardSelector}, ${reactiveFieldSelector}`;
 let pendingPointerFrame = 0;
 let activePressedComponent = null;
@@ -423,12 +465,26 @@ $('#continue-form').onsubmit = async (event) => { event.preventDefault(); const 
 $('#schedule-kind').onchange = syncScheduleForm;
 $('#schedule-project').onchange = () => updateScheduleThreads();
 $('#retry-on-network').onchange = syncScheduleForm;
+$('#datetime-hour').innerHTML = Array.from({ length:24 }, (_, hour) => `<option value="${hour}">${String(hour).padStart(2, '0')}</option>`).join('');
+$('#datetime-minute').innerHTML = Array.from({ length:60 }, (_, minute) => `<option value="${minute}">${String(minute).padStart(2, '0')}</option>`).join('');
+$('#schedule-run-at-button').onclick = openDateTimePicker;
+$('#datetime-prev').onclick = () => { pickerVisibleMonth = new Date(pickerVisibleMonth.getFullYear(), pickerVisibleMonth.getMonth() - 1, 1); renderDateTimePicker(); };
+$('#datetime-next').onclick = () => { pickerVisibleMonth = new Date(pickerVisibleMonth.getFullYear(), pickerVisibleMonth.getMonth() + 1, 1); renderDateTimePicker(); };
+$('#datetime-cancel').onclick = () => $('#datetime-dialog').close();
+$('#datetime-confirm').onclick = () => {
+  pickerSelectedDate.setHours(Number($('#datetime-hour').value), Number($('#datetime-minute').value), 0, 0);
+  $('#schedule-run-at').value = localDateTimeValue(pickerSelectedDate);
+  updateDateTimeLabel();
+  $('#datetime-dialog').close();
+};
+$('#datetime-dialog').onclick = (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); };
 $('#schedule-form').onsubmit = async (event) => {
   event.preventDefault();
   const formData = new FormData(event.target);
   const data = Object.fromEntries(formData.entries());
   data.interval_minutes = data.kind === 'interval' ? Number(data.interval_minutes) : null;
   data.run_at = data.kind === 'at_time' ? data.run_at : null;
+  if (data.kind === 'at_time' && !data.run_at) return toast('请选择执行时间');
   data.token_budget = data.token_budget || null;
   data.price_budget_usd = data.price_budget_usd || null;
   data.price_per_1k_tokens = data.price_per_1k_tokens || null;

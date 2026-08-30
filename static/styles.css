@@ -6,7 +6,7 @@
   --surface: rgba(255, 255, 255, .045);
   --surface-solid: #222328;
   --surface-hover: rgba(255, 255, 255, .075);
-  --field: rgba(0, 0, 0, .22);
+  --field: #1d1e22;
   --border: rgba(255, 255, 255, .105);
   --border-strong: rgba(255, 255, 255, .16);
   --text: #f2f2f4;
@@ -259,26 +259,25 @@ h1, h2, h3, p { margin: 0; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 label { display: flex; flex-direction: column; gap: 6px; color: var(--secondary); font-size: 10px; }
 label small { color: var(--tertiary); font-size: 8px; }
-input, select, textarea { width: 100%; min-height: 31px; padding: 7px 9px; border: 1px solid var(--border-strong); border-radius: 7px; outline: none; background: var(--field); }
-input:not([type="checkbox"]):not([type="hidden"]), select, textarea {
+input, select, textarea, .picker-button { width: 100%; min-height: 31px; padding: 7px 9px; border: 1px solid var(--border-strong); border-radius: 7px; outline: none; background: var(--field); }
+input:not([type="checkbox"]):not([type="hidden"]), select, textarea, .picker-button {
   --field-border-color:var(--border-strong); border-color:transparent;
   background:
     linear-gradient(var(--field), var(--field)) padding-box,
     radial-gradient(58px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), var(--edge-highlight, transparent), transparent 76%) border-box,
     linear-gradient(var(--field-border-color), var(--field-border-color)) border-box;
 }
-input:not([type="checkbox"]):not([type="hidden"]):hover, select:hover, textarea:hover { --field-border-color: rgba(166,218,255,.42); }
-input:focus, select:focus, textarea:focus { --field-border-color:rgba(10,132,255,.62); border-color:transparent; box-shadow:none; }
-input.field-pressed, select.field-pressed, textarea.field-pressed {
-  /* Hover is edge-only; the inner light is reserved for the short pressed
-     state and kept compact so it reads as feedback rather than a spotlight. */
-  --field-press-color:rgba(96,177,255,.09);
+input:not([type="checkbox"]):not([type="hidden"]):hover, select:hover, textarea:hover, .picker-button:hover { --field-border-color: rgba(166,218,255,.42); }
+input:focus, select:focus, textarea:focus, .picker-button:focus { --field-border-color:rgba(10,132,255,.62); border-color:transparent; box-shadow:none; }
+input.field-pressed, select.field-pressed, textarea.field-pressed, .picker-button.field-pressed {
+  --field-border-color:rgba(112,190,255,.78);
   background:
-    radial-gradient(92px circle at var(--press-x, 50%) var(--press-y, 50%), var(--field-press-color), transparent 68%) padding-box,
     linear-gradient(var(--field), var(--field)) padding-box,
     radial-gradient(58px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), var(--edge-highlight, transparent), transparent 76%) border-box,
     linear-gradient(var(--field-border-color), var(--field-border-color)) border-box;
 }
+.picker-button { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--text); text-align:left; font-weight:400; }
+.picker-button i { color:var(--tertiary); font-style:normal; }
 textarea { resize: vertical; line-height: 1.45; }
 .settings-group > header { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .path-control { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 8px; }
@@ -322,6 +321,20 @@ summary { color: var(--secondary); font-size: 10px; }
 .dialog-kicker { color: var(--tertiary); font-size: 9px; font-weight: 600; }
 .dialog-close { padding: 0 4px; border: 0; color: var(--secondary); background: transparent; font-size: 21px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.datetime-dialog { width:min(390px, calc(100vw - 40px)); }
+.datetime-picker { padding:18px; }
+.datetime-picker > header { display:grid; grid-template-columns:30px 1fr 30px; align-items:center; gap:8px; }
+.datetime-picker > header h3 { margin:0; text-align:center; font-size:14px; }
+.datetime-weekdays, .datetime-calendar { display:grid; grid-template-columns:repeat(7, 1fr); gap:4px; }
+.datetime-weekdays { margin-top:15px; color:var(--tertiary); font-size:9px; text-align:center; }
+.datetime-calendar { margin-top:7px; }
+.datetime-calendar button { height:31px; padding:0; border:1px solid transparent; color:var(--secondary); background:transparent; font-size:10px; }
+.datetime-calendar button:hover { border-color:rgba(166,218,255,.48); color:white; }
+.datetime-calendar button.outside { color:#555861; }
+.datetime-calendar button.selected { border-color:var(--accent); color:white; background:rgba(10,132,255,.82); }
+.datetime-calendar button:disabled { color:#41434a; }
+.datetime-time { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid var(--border); }
+.datetime-picker > .dialog-actions { margin-top:16px; }
 .schedule-dialog { width:min(600px, calc(100vw - 40px)); }
 .form-section { display:flex; flex-direction:column; gap:12px; padding:14px 0 0; border-top:1px solid var(--border); }
 .form-section > header { display:flex; align-items:flex-start; justify-content:space-between; }

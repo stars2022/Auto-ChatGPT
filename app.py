@@ -915,7 +915,7 @@ def schedule_due(schedule: dict[str, Any], current_ms: int, recovered_threads: s
         return matching_recovery
     if kind == "interval":
         interval = max(1, int(schedule.get("interval_minutes", 60))) * 60_000
-        baseline = int(schedule.get("last_run_at") or schedule.get("created_at") or current_ms)
+        baseline = int(schedule.get("last_check_at") or schedule.get("created_at") or current_ms)
         return current_ms - baseline >= interval
     if kind == "at_time":
         at = parse_when(str(schedule.get("run_at") or ""))
@@ -992,12 +992,39 @@ class Scheduler:
                     "message": f"检测到 {len(recovered)} 个线程离开 usage_limited 状态",
                 })
             for schedule in app.get("schedules", []):
+                if schedule.get("kind") == "interval" and current.get(str(schedule.get("thread_id") or "")) == "active":
+                    # Re-arm the watchdog only after the queued continuation is
+                    # observed running. This prevents a slow status update from
+                    # causing the same stopped target to be queued every interval.
+                    schedule["awaiting_active"] = False
                 if schedule.get("waiting_for_quota") and recovered & {str(schedule.get("thread_id") or ""), "__official__", "__usage_probe__"}:
                     schedule["waiting_for_quota"] = False
                     schedule["retry_pending"] = True
                     schedule["next_attempt_at"] = current_ms
                 if not schedule_due(schedule, current_ms, recovered):
                     continue
+                if schedule.get("kind") == "interval":
+                    # An interval schedule is a watchdog, not a repeating message.
+                    # Each due interval observes the target first and only queues a
+                    # continuation when the target is no longer running.
+                    target_status = current.get(str(schedule.get("thread_id") or ""))
+                    schedule["last_check_at"] = current_ms
+                    schedule["last_observed_status"] = target_status or "stopped"
+                    if target_status == "active":
+                        schedule["waiting_for_quota"] = False
+                        schedule["retry_pending"] = False
+                        schedule["next_attempt_at"] = None
+                        schedule["blocked_reason"] = None
+                        schedule["consecutive_failures"] = 0
+                        continue
+                    if schedule.get("awaiting_active"):
+                        continue
+                    if target_status == "usage_limited" and schedule.get("retry_on_quota", True):
+                        schedule["waiting_for_quota"] = True
+                        schedule["retry_pending"] = False
+                        schedule["next_attempt_at"] = None
+                        schedule["blocked_reason"] = "等待额度恢复"
+                        continue
                 allowed, budget_reason = budget_guard(schedule)
                 if not allowed:
                     schedule["enabled"] = False
@@ -1018,6 +1045,8 @@ class Scheduler:
                     schedule["run_count"] = int(schedule.get("run_count") or 0) + 1
                     schedule["consecutive_failures"] = 0
                     schedule["waiting_for_quota"] = False
+                    if schedule.get("kind") == "interval":
+                        schedule["awaiting_active"] = True
                     if schedule.get("kind") == "at_time":
                         schedule["enabled"] = False
                         schedule["completed_at"] = attempt_at
@@ -1178,9 +1207,10 @@ class Handler(BaseHTTPRequestHandler):
                 "token_budget": token_budget, "price_budget_usd": price_budget, "price_per_1k_tokens": price_per_1k,
                 "retry_on_network": bool(data.get("retry_on_network", True)), "retry_on_quota": bool(data.get("retry_on_quota", True)),
                 "max_attempts": max_attempts, "backoff_seconds": backoff_seconds,
-                "created_at": now_ms(), "last_run_at": None, "last_attempt_at": None, "run_count": 0, "last_result": None,
+                "created_at": now_ms(), "last_run_at": None, "last_check_at": None, "last_observed_status": None,
+                "last_attempt_at": None, "run_count": 0, "last_result": None,
                 "attempt_count": 0, "consecutive_failures": 0, "waiting_for_quota": False, "retry_pending": False,
-                "next_attempt_at": None, "blocked_reason": None, "completed_at": None,
+                "next_attempt_at": None, "blocked_reason": None, "completed_at": None, "awaiting_active": False,
             }
             app.setdefault("schedules", []).append(item); write_app_state(app); self.send_json(item, HTTPStatus.CREATED); return
         if parsed.path == "/api/schedules/toggle":
